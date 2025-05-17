@@ -5,20 +5,11 @@ load("//tools/rules:workspace.bzl", "new_patched_local_repository")
 
 http_archive(
     name = "rules_cc",
-    patches = [
-        "//:tools/rules_cc/cuda_support.patch",
-    ],
     strip_prefix = "rules_cc-40548a2974f1aea06215272d9c2b47a14a24e556",
     urls = [
         "https://mirror.bazel.build/github.com/bazelbuild/rules_cc/archive/40548a2974f1aea06215272d9c2b47a14a24e556.tar.gz",
         "https://github.com/bazelbuild/rules_cc/archive/40548a2974f1aea06215272d9c2b47a14a24e556.tar.gz",
     ],
-)
-
-http_archive(
-    name = "rules_cuda",
-    strip_prefix = "runtime-b1c7cce21ba4661c17ac72421c6a0e2015e7bef3/third_party/rules_cuda",
-    urls = ["https://github.com/tensorflow/runtime/archive/b1c7cce21ba4661c17ac72421c6a0e2015e7bef3.tar.gz"],
 )
 
 http_archive(
@@ -30,10 +21,6 @@ http_archive(
     ],
     # sha256 = "218efe8ee736d26a3572663b374a253c012b716d8af0c07e842e82f238a0a7ee",
 )
-
-load("@rules_cuda//cuda:dependencies.bzl", "rules_cuda_dependencies")
-
-rules_cuda_dependencies(with_rules_cc = False)
 
 load("@rules_cc//cc:repositories.bzl", "rules_cc_toolchains")
 
@@ -159,11 +146,11 @@ new_local_repository(
     path = "third_party/kineto",
 )
 
-new_local_repository(
-    name = "opentelemetry-cpp",
-    build_file = "//third_party::opentelemetry-cpp.BUILD",
-    path = "third_party/opentelemetry-cpp",
-)
+# new_local_repository(
+#     name = "opentelemetry-cpp",
+#     build_file = "//third_party::opentelemetry-cpp.BUILD",
+#     path = "third_party/opentelemetry-cpp",
+# )
 
 new_local_repository(
     name = "cpp-httplib",
@@ -208,14 +195,6 @@ http_archive(
     ],
 )
 
-http_archive(
-    name = "rules_python",
-    # TODO Fix bazel linter to support hashes for release tarballs.
-    #
-    # sha256 = "94750828b18044533e98a129003b6a68001204038dc4749f40b195b24c38f49f",
-    strip_prefix = "rules_python-0.21.0",
-    url = "https://github.com/bazelbuild/rules_python/releases/download/0.21.0/rules_python-0.21.0.tar.gz",
-)
 
 load("@rules_python//python:repositories.bzl", "py_repositories")
 
@@ -246,7 +225,6 @@ load("@pybind11_bazel//:python_configure.bzl", "python_configure")
 
 python_configure(
     name = "local_config_python",
-    python_interpreter_target = interpreter,
 )
 
 load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")

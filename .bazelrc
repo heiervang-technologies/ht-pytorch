@@ -16,8 +16,8 @@ build:no-tty --show_progress_rate_limit 10
 # Build with GPU support by default.
 build --define=cuda=true
 # rules_cuda configuration
-build --@rules_cuda//cuda:enable_cuda
-build --@rules_cuda//cuda:cuda_targets=sm_52
+build --@rules_cuda//cuda:enable=True
+build --@rules_cuda//cuda:archs=sm_52
 build --@rules_cuda//cuda:compiler=nvcc
 build --repo_env=CUDA_PATH=/usr/local/cuda
 
@@ -112,3 +112,4 @@ build --per_file_copt='//:aten/src/ATen/RegisterQuantizedMeta\.cpp$'@-Wno-error=
 build --per_file_copt='//:aten/src/ATen/RegisterZeroTensor\.cpp$'@-Wno-error=unused-function
 build --per_file_copt='//:torch/csrc/lazy/generated/RegisterAutogradLazy\.cpp$'@-Wno-error=unused-function
 build --per_file_copt='//:torch/csrc/lazy/generated/RegisterLazy\.cpp$'@-Wno-error=unused-function
+common --enable_bzlmod --enable_workspace

@@ -22,7 +22,7 @@ def define_targets(rules, extra_defines=[]):
         defines = ["USE_CUDA"] + extra_defines,
         linkstatic = True,
         local_defines = ["C10_BUILD_MAIN_LIB"],
-        target_compatible_with = rules.requires_cuda_enabled(),
+        target_compatible_with = rules.requires_cuda(),
         visibility = ["//visibility:public"],
         deps = [
             ":Macros",
