@@ -594,7 +594,7 @@ def merge_chunks(
                         )
                 cat_fn = local_map(
                     lambda *chunks: torch.cat(chunks, dim=arg.split_dim),
-                    out_placements=placements,
+                    out_placements=(placements,),
                     in_placements=tuple(placements for _ in range(len(values_to_cat))),
                 )
                 args_flattened.append(cat_fn(*values_to_cat))

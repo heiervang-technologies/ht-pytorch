@@ -228,7 +228,9 @@ class _DTensorMeta(_TensorMeta):
             return []
 
         # Get base class differences (compares local shape/stride/dtype/requires_grad)
-        diffs = super().get_diff(other)
+        # NOTE: Use explicit class call instead of super() because
+        # @dataclass(slots=True) on both parent and child can break super().
+        diffs = _TensorMeta.get_diff(self, other)
 
         # Add DTensor-specific comparisons if other is also _DTensorMeta
         if isinstance(other, _DTensorMeta):
