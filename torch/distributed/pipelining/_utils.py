@@ -20,15 +20,6 @@ if TYPE_CHECKING:
     from torch.distributed.device_mesh import DeviceMesh
     from torch.distributed.tensor.placement_types import Placement
 
-    class _GetMeshCallback(Protocol):
-        """Callback to create/retrieve a DeviceMesh from its cache key components."""
-
-        def __call__(
-            self,
-            mesh_dim_names: tuple[str, ...],
-            mesh_layout: _MeshLayout | None,
-        ) -> DeviceMesh: ...
-
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +33,16 @@ MeshCacheKey: TypeAlias = tuple[tuple[str, ...], _MeshLayout | None]
 
 class PipeliningMetadataError(RuntimeError):
     """Raised on metadata mismatches during pipeline communication."""
+
+
+class GetMeshCallback(Protocol):
+    """Callback to create/retrieve a DeviceMesh from its cache key components."""
+
+    def __call__(
+        self,
+        mesh_dim_names: tuple[str, ...],
+        mesh_layout: _MeshLayout | None,
+    ) -> DeviceMesh: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,17 +83,20 @@ class _TensorMeta:
             requires_grad=tensor.requires_grad,
         )
 
-    def to_meta_tensor(self) -> torch.Tensor:
-        """Reconstruct a meta-device tensor from this metadata.
+    def to_tensor(self, device: torch.device | str) -> torch.Tensor:
+        """Reconstruct a tensor on ``device`` from this metadata.
+
+        Args:
+            device: Target device for the tensor.
 
         Returns:
-            An empty strided tensor on the ``"meta"`` device.
+            An empty strided tensor on ``device``.
         """
         return torch.empty_strided(
             self.shape,
             self.stride,
             dtype=self.dtype,
-            device="meta",
+            device=device,
             requires_grad=self.requires_grad,
         )
 
@@ -183,25 +187,26 @@ class _DTensorMeta(_TensorMeta):
         """Cache key ``(mesh_dim_names, mesh_layout)`` for mesh lookup."""
         return (self.mesh_dim_names, self.mesh_layout)
 
-    def to_meta_dtensor(self, mesh: DeviceMesh) -> DTensor:
-        """Reconstruct a meta-device DTensor with placements.
+    def to_dtensor(self, device: torch.device | str, mesh: DeviceMesh) -> DTensor:
+        """Reconstruct a DTensor on ``device`` with placements.
 
         Args:
+            device: Target device for the local tensor.
             mesh: The ``DeviceMesh`` to attach.
 
         Returns:
-            A DTensor on the ``"meta"`` device.
+            A DTensor on ``device``.
         """
-        local_meta = torch.empty_strided(
+        local_tensor = torch.empty_strided(
             self.shape,
             self.stride,
             dtype=self.dtype,
-            device="meta",
+            device=device,
         )
         return cast(
             DTensor,
             DTensor.from_local(
-                local_meta,
+                local_tensor,
                 device_mesh=mesh,
                 placements=self.placements,
                 shape=self.global_shape,
@@ -326,6 +331,22 @@ def _make_tensor_from_meta(
     )
 
 
+def _derive_grad_metas(
+    tensor_metas: tuple[TensorMeta, ...],
+) -> tuple[_TensorMeta | None, ...]:
+    """Derive gradient metadata from tensor metadata.
+
+    Returns metadata with the same shape/stride/dtype but ``requires_grad=False``.
+    Entries where the source has ``requires_grad=False`` become ``None``.
+    """
+    return tuple(
+        _TensorMeta(shape=m.shape, stride=m.stride, dtype=m.dtype, requires_grad=False)
+        if m.requires_grad
+        else None
+        for m in tensor_metas
+    )
+
+
 class _MeshCache:
     """Cache for :class:`DeviceMesh` objects keyed by ``(mesh_dim_names, mesh_layout)``.
 
@@ -333,24 +354,15 @@ class _MeshCache:
     TorchTitan-style frameworks where meshes derive from a common world).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, get_mesh_cb: GetMeshCallback | None = None) -> None:
         self._cache: dict[MeshCacheKey, DeviceMesh] = {}
+        self._get_mesh_cb = get_mesh_cb
 
-    def get(self, key: MeshCacheKey) -> DeviceMesh | None:
-        """Get a mesh by cache key, or None if not found."""
-        return self._cache.get(key)
-
-    def get_or_create(
-        self,
-        key: MeshCacheKey,
-        get_mesh_callback: _GetMeshCallback | None = None,
-    ) -> DeviceMesh:
-        """Return a cached mesh, or create one via ``get_mesh_callback``.
+    def get_mesh(self, key: MeshCacheKey) -> DeviceMesh:
+        """Return a cached mesh, or create one via the callback.
 
         Args:
             key: Cache key ``(mesh_dim_names, mesh_layout)``.
-            get_mesh_callback: Factory called with ``(mesh_dim_names, mesh_layout)``
-                when the key is not cached.
 
         Returns:
             The ``DeviceMesh``.
@@ -363,14 +375,14 @@ class _MeshCache:
 
         mesh_dim_names, mesh_layout = key
 
-        if get_mesh_callback is None:
+        if self._get_mesh_cb is None:
             raise PipeliningMetadataError(
                 f"Mesh not found in cache for mesh_dim_names={mesh_dim_names}, "
                 f"mesh_layout={mesh_layout}, and no get_mesh callback provided. "
                 f"Provide a get_mesh callback or use DTensors in static mode."
             )
 
-        mesh = get_mesh_callback(mesh_dim_names, mesh_layout)
+        mesh = self._get_mesh_cb(mesh_dim_names, mesh_layout)
         if mesh is None:
             raise PipeliningMetadataError(
                 f"Mesh lookup failed: callback returned None for "
@@ -493,42 +505,6 @@ def flatten_args(args, *, detach: bool = False):
 def flatten_args_detach(args):
     """Flatten and detach. Deprecated: use ``flatten_args(args, detach=True)``."""
     return flatten_args(args, detach=True)
-
-
-# Legacy validation functions (kept for backward compatibility with existing stage.py)
-# These will be removed in the next commit when stage.py is updated.
-class PipeliningShapeError(RuntimeError):
-    """Shape mismatch between configured and runtime values."""
-
-
-def validate_tensor_metadata(desc, expected, given):
-    if not expected.shape == given.shape:
-        raise PipeliningShapeError(
-            f"{desc} has a shape mismatch: expected {expected.shape} actual {given.shape}"
-        )
-    if not expected.dtype == given.dtype:
-        raise PipeliningShapeError(
-            f"{desc} has a dtype mismatch: expected {expected.dtype} actual {given.dtype}"
-        )
-    if not expected.stride() == given.stride():
-        raise PipeliningShapeError(
-            f"{desc} has a stride mismatch: expected {expected.stride()} actual {given.stride()}"
-        )
-
-
-def validate_tensors_metadata(
-    desc,
-    expected_tensors: list[torch.Tensor] | tuple[torch.Tensor, ...],
-    actual_tensors: list[torch.Tensor] | tuple[torch.Tensor, ...],
-):
-    if len(expected_tensors) != len(actual_tensors):
-        raise PipeliningShapeError(
-            f"{desc}: Number of values ({len(actual_tensors)}) does not match expected number ({len(expected_tensors)})"
-        )
-    for i in range(len(expected_tensors)):
-        validate_tensor_metadata(
-            f"{desc}: value {i}", expected_tensors[i], actual_tensors[i]
-        )
 
 
 def generate_stage_to_rank_mapping(
@@ -833,6 +809,52 @@ def validate_metadata(
             )
 
     return diffs
+
+
+def validate_tensors_metadata(
+    desc: str,
+    expected: tuple[TensorMeta | None, ...],
+    actual: tuple[torch.Tensor | TensorMeta | None, ...],
+    *,
+    raise_on_mismatch: bool = True,
+    warn_on_mismatch: bool = False,
+) -> list[str]:
+    """Validate metadata for a tuple of tensors element-wise.
+
+    Args:
+        desc: Description prefix for error/warning messages.
+        expected: Tuple of expected metadata (may include ``None`` for grads).
+        actual: Tuple of actual tensors or metadata to compare against.
+        raise_on_mismatch: If ``True``, raise on the first mismatch.
+        warn_on_mismatch: If ``True``, issue warnings for mismatches.
+
+    Returns:
+        Aggregated list of difference strings.
+
+    Raises:
+        PipeliningMetadataError: If lengths differ or on mismatch.
+    """
+    if len(expected) != len(actual):
+        msg = f"{desc}: expected {len(expected)} tensors, got {len(actual)}"
+        if raise_on_mismatch:
+            raise PipeliningMetadataError(msg)
+        if warn_on_mismatch:
+            warnings.warn(msg, UserWarning, stacklevel=2)
+        return [msg]
+
+    all_diffs: list[str] = []
+    for i, (exp, act) in enumerate(zip(expected, actual, strict=True)):
+        if exp is None or act is None:
+            continue
+        diffs = validate_metadata(
+            f"{desc}[{i}]",
+            exp,
+            act,
+            raise_on_mismatch=raise_on_mismatch,
+            warn_on_mismatch=warn_on_mismatch,
+        )
+        all_diffs.extend(diffs)
+    return all_diffs
 
 
 def validate_static_arg_grad_correspondence(
