@@ -889,6 +889,9 @@ class BaseSchedulerNode:
                 or buf_node.get_inputs_that_alias_output()
                 or buf_node.get_mutation_names()
                 or buf.get_name() in V.graph.removed_buffers
+                # CommBufferLayout buffer must keep its P2P allocation.
+                # Do not allow in-place reuse from a regular CUDA buffer.
+                or isinstance(buf_node.get_output_spec(), ir.CommBufferLayout)
             ):
                 continue
 
