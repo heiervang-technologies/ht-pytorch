@@ -30,7 +30,7 @@ import sys
 import types
 import typing
 import unittest
-from collections import OrderedDict
+from collections import defaultdict, OrderedDict
 from collections.abc import Callable, Iterable, KeysView, Sequence
 from typing import Any, cast, Literal, TYPE_CHECKING
 
@@ -3301,7 +3301,7 @@ class DictBuiltinVariable(VariableTracker):
         *args: VariableTracker,
         **kwargs: VariableTracker,
     ) -> VariableTracker:
-        if user_cls not in {dict, OrderedDict, OrderedDict}:
+        if user_cls not in {dict, OrderedDict, defaultdict}:
             unimplemented(
                 gb_type="Unsupported dict type for fromkeys()",
                 context=f"{user_cls.__name__}.fromkeys(): {args} {kwargs}",
@@ -3345,7 +3345,7 @@ class DictBuiltinVariable(VariableTracker):
 
         arg, value = args
         DictVariableType = (
-            ConstDictVariable if user_cls is not OrderedDict else DefaultDictVariable
+            ConstDictVariable if user_cls is not defaultdict else DefaultDictVariable
         )
 
         if isinstance(arg, dict):
