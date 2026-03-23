@@ -1820,6 +1820,31 @@ SeqNr|OrigAten|SrcFn|FwdSrcFn
         # Should only compile once regardless of batch size changes
         self.assertEqual(cnt.frame_count, 1)
 
+    def test_none_saved_tensors_in_vc_check_split(self):
+        # Test that AOTAutograd handles None values in saved-for-backward tensors.
+        # nn.Linear(bias=False) saves None for the bias parameter, which caused
+        # AssertionError in the vc_check/no_vc_check tensor split (D90333110).
+        model = torch.nn.Sequential(
+            torch.nn.Linear(16, 32, bias=False),
+            torch.nn.ReLU(),
+            torch.nn.Linear(32, 8, bias=False),
+        )
+
+        compiled_model = torch.compile(model, backend="aot_eager")
+        x = torch.randn(4, 16, requires_grad=True)
+
+        # Forward + backward should not raise AssertionError about
+        # "expected all tensors_saved_with_vc_check to be Tensors"
+        out = compiled_model(x)
+        out.sum().backward()
+
+        # Verify correctness against eager
+        x2 = x.detach().clone().requires_grad_(True)
+        expected = model(x2)
+        expected.sum().backward()
+        self.assertEqual(out, expected)
+        self.assertEqual(x.grad, x2.grad)
+
 
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests

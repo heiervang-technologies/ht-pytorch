@@ -2620,35 +2620,39 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
                 # Split tensors into those that need VC checks (via save_for_backward)
                 # and those that don't (stashed directly on ctx).
                 # The partitioner sorts tensors so that no-VC-check tensors are at the end.
-                tensors_saved_with_vc_check = fw_outs[
-                    CompiledFunction.metadata.tensors_saved_for_backwards_with_vc_check_slice
-                ]
-                tensors_saved_no_vc_check = fw_outs[
-                    CompiledFunction.metadata.tensors_saved_for_backwards_no_vc_check_slice
-                ]
+                vc_check_slice = CompiledFunction.metadata.tensors_saved_for_backwards_with_vc_check_slice
+                no_vc_check_slice = CompiledFunction.metadata.tensors_saved_for_backwards_no_vc_check_slice
+                tensors_saved_with_vc_check = fw_outs[vc_check_slice]
+                tensors_saved_no_vc_check = fw_outs[no_vc_check_slice]
+                # Saved tensors may include None values (e.g., optional parameters
+                # like bias=None in Linear layers). These are valid: save_for_backward
+                # handles None natively, and they are returned as None during backward.
                 if not all(
-                    isinstance(x, torch.Tensor) for x in tensors_saved_with_vc_check
+                    isinstance(x, torch.Tensor) or x is None
+                    for x in tensors_saved_with_vc_check
                 ):
                     raise AssertionError(
-                        f"expected all tensors_saved_with_vc_check to be Tensors, "
+                        f"expected all tensors_saved_with_vc_check to be Tensors or None, "
                         f"got types: {[type(x) for x in tensors_saved_with_vc_check]}"
                     )
                 if not all(
-                    isinstance(x, torch.Tensor) for x in tensors_saved_no_vc_check
+                    isinstance(x, torch.Tensor) or x is None
+                    for x in tensors_saved_no_vc_check
                 ):
                     raise AssertionError(
-                        f"expected all tensors_saved_no_vc_check to be Tensors, "
+                        f"expected all tensors_saved_no_vc_check to be Tensors or None, "
                         f"got types: {[type(x) for x in tensors_saved_no_vc_check]}"
                     )
 
                 # See Note [Detaching saved tensors in AOTAutograd]
                 num_vc_check = len(tensors_saved_with_vc_check)
                 tensors_to_save = [
-                    x.detach() if x._is_view() else x
+                    x.detach() if x is not None and x._is_view() else x
                     for x in tensors_saved_with_vc_check
                 ]
                 tensors_no_vc = [
-                    x.detach() if x._is_view() else x for x in tensors_saved_no_vc_check
+                    x.detach() if x is not None and x._is_view() else x
+                    for x in tensors_saved_no_vc_check
                 ]
 
                 # dynamic_saved_tensors_idxs has indices relative to all saved tensors
