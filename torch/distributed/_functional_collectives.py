@@ -1214,6 +1214,8 @@ def _resolve_group(
             raise AssertionError(
                 "Only 1D mesh is supported, pass in (DeviceMesh, int) together if mesh > 1D"
             )
+        if dist.config.compile_on_one_rank:
+            return torch.ops._dtensor.mesh_get_process_group(group, 0)
         return group._dim_group_names[0]
     elif isinstance(group, tuple):
         if (
@@ -1223,6 +1225,8 @@ def _resolve_group(
         ):
             dmesh = group[0]
             dim = group[1]
+            if dist.config.compile_on_one_rank:
+                return torch.ops._dtensor.mesh_get_process_group(dmesh, dim)
             return dmesh._dim_group_names[dim]
         else:
             raise ValueError(
@@ -1831,6 +1835,8 @@ def _group_or_group_name(
     group: dist.ProcessGroup | c10d.GroupName,
 ) -> dist.ProcessGroup | c10d.GroupName:
     if isinstance(group, str):
+        return group
+    elif dist.config.compile_on_one_rank:
         return group
     else:
         return group.group_name
