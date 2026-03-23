@@ -746,6 +746,7 @@ class ConstDictVariable(VariableTracker):
             if has_arg or has_kwargs:
                 tx.output.side_effects.mutation(self)
                 if has_arg:
+                    dict_vt: VariableTracker
                     if isinstance(args[0], ConstDictVariable):
                         # NB - Guard on all the keys of the other dict to ensure
                         # correctness.
