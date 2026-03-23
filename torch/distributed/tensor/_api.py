@@ -103,12 +103,13 @@ class _ToTorchTensor(torch.autograd.Function):
         ctx.dtensor_spec = input._spec
         ctx.grad_placements = grad_placements
         ctx.set_materialize_grads(False)
-        local_tensor = input._local_tensor
 
-        # We need to return a fresh Tensor object there as autograd metadata
-        # will be inplaced into it. So we don't want to pollute the Tensor
-        # object stored in the _local_tensor of this DTensor.
-        return local_tensor.view_as(local_tensor)
+        # _to_local_tensor() returns a view with non-sharded dims bound
+        # to the DTensor's symbolic sizes (see its docstring).
+        # view_as creates a fresh tensor so autograd metadata won't
+        # pollute the stored _local_tensor.
+        result = input._to_local_tensor()
+        return result.view_as(result)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor | None):  # type: ignore[override]
@@ -545,6 +546,29 @@ class DTensor(torch.Tensor):
             tuple(grad_placements) if grad_placements is not None else None,
         )
 
+    def _to_local_tensor(self) -> torch.Tensor:
+        """Return the local tensor with symbolic sizes bound to the DTensor's
+        global sizes for non-sharded dimensions.
+
+        Under torch.compile, the inner ``_local_tensor`` has independent
+        symbolic variables.  For non-sharded dims the local size equals the
+        DTensor's global size, but the compiler doesn't know this.  We use
+        ``narrow()`` on each non-sharded dim to bind its symbolic size to the
+        DTensor's symbol so downstream view/reshape operations see consistent
+        symbols.
+
+        See https://github.com/pytorch/pytorch/issues/175690
+        """
+        result = self._local_tensor
+        sharded_dims: set[int] = set()
+        for p in self._spec.placements:
+            if isinstance(p, Shard):
+                sharded_dims.add(p.dim)
+        for dim in range(result.dim()):
+            if dim not in sharded_dims:
+                result = result.narrow(dim, 0, self.size(dim))
+        return result
+
     def to_local(
         self, *, grad_placements: Sequence[Placement] | None = None
     ) -> torch.Tensor:
@@ -574,7 +598,7 @@ class DTensor(torch.Tensor):
             will depend on if the `DTensor` requires_grad or not.
         """
         if not torch.is_grad_enabled():
-            return self._local_tensor
+            return self._to_local_tensor()
 
         if grad_placements is not None and not isinstance(grad_placements, tuple):
             grad_placements = tuple(grad_placements)
