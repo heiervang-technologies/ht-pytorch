@@ -29,3 +29,6 @@ pip.parse(
 
 use_repo(pip, "pypi")
 bazel_dep(name = "pybind11_bazel", version = "2.13.6")
+
+pybind11_configure = use_extension("@pybind11_bazel//:internal_configure.bzl", "internal_configure_extension")
+use_repo(pybind11_configure, "pybind11")
