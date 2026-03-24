@@ -1,3 +1,7 @@
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13
+#pragma GCC diagnostic ignored "-Wfree-nonheap-object"
+#endif
+
 #include <c10/util/irange.h>
 #include <torch/csrc/jit/passes/onnx/constant_map.h>
 #include <iostream>
