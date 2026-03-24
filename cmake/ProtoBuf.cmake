@@ -4,7 +4,12 @@ macro(custom_protobuf_find)
   message(STATUS "Use custom protobuf build.")
   option(protobuf_BUILD_TESTS "" OFF)
   option(protobuf_BUILD_EXAMPLES "" OFF)
+  option(protobuf_BUILD_CONFORMANCE "" OFF)
   option(protobuf_WITH_ZLIB "" OFF)
+  set(protobuf_INSTALL ON CACHE BOOL "" FORCE)
+  set(ABSL_ENABLE_INSTALL ON CACHE BOOL "" FORCE)
+  set(ABSL_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  set(ABSL_PROPAGATE_CXX_STD ON)
   if(${CAFFE2_LINK_LOCAL_PROTOBUF})
     # If we are going to link protobuf locally, we will need to turn off
     # shared libs build for protobuf.
@@ -33,14 +38,7 @@ macro(custom_protobuf_find)
   set(__caffe2_CMAKE_POSITION_INDEPENDENT_CODE ${CMAKE_POSITION_INDEPENDENT_CODE})
   set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-  if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0.0")
-    message(WARNING "Ancient protobuf forces CMake compatibility")
-    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-    add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../third_party/protobuf/cmake)
-    unset(CMAKE_POLICY_VERSION_MINIMUM)
-  else()
-    add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../third_party/protobuf/cmake)
-  endif()
+  add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../third_party/protobuf)
 
   set(CMAKE_POSITION_INDEPENDENT_CODE ${__caffe2_CMAKE_POSITION_INDEPENDENT_CODE})
 
@@ -96,13 +94,6 @@ if((NOT TARGET protobuf::libprotobuf) AND (NOT TARGET protobuf::libprotobuf-lite
       "the future, and you will need to specify -DBUILD_CUSTOM_PROTOBUF=ON "
       "explicitly.")
   custom_protobuf_find()
-
-  # TODO(jiayq): enable this in the future, when Jenkins Mac support is
-  # properly set up with protobuf installs.
-
-  # message(FATAL_ERROR
-  #     "Protobuf cannot be found. Caffe2 will have to build with libprotobuf. "
-  #     "Please set the proper paths so that I can find protobuf correctly.")
 endif()
 
 get_target_property(__tmp protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
@@ -165,9 +156,6 @@ function(caffe2_protobuf_generate_cpp_py srcs_var hdrs_var python_var)
     # points to an existing path, it is a no-op.
 
     if(${CAFFE2_LINK_LOCAL_PROTOBUF})
-      # We need to rewrite the pb.h files to route GetEmptyStringAlreadyInited
-      # through our wrapper in proto_utils so the memory location test
-      # is correct.
       add_custom_command(
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.cc"
                "${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.h"
@@ -176,11 +164,7 @@ function(caffe2_protobuf_generate_cpp_py srcs_var hdrs_var python_var)
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}"
         COMMAND ${CAFFE2_PROTOC_EXECUTABLE} -I${PROJECT_SOURCE_DIR} --cpp_out=${DLLEXPORT_STR}${PROJECT_BINARY_DIR} ${abs_fil}
         COMMAND ${CAFFE2_PROTOC_EXECUTABLE} -I${PROJECT_SOURCE_DIR} --python_out "${PROJECT_BINARY_DIR}" ${abs_fil}
-
-        # If we remove all reference to these pb.h files from external
-        # libraries and binaries this rewrite can be removed.
         COMMAND ${CMAKE_COMMAND} -DFILENAME=${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.h -DNAMESPACES=caffe\;caffe2\;onnx\;torch -P ${PROJECT_SOURCE_DIR}/cmake/ProtoBufPatch.cmake
-
         DEPENDS ${CAFFE2_PROTOC_EXECUTABLE} ${abs_fil}
         COMMENT "Running C++/Python protocol buffer compiler on ${fil}" VERBATIM )
     else()
