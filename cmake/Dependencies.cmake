@@ -577,6 +577,17 @@ if(USE_XNNPACK AND NOT USE_SYSTEM_XNNPACK)
       set(XNNPACK_BUILD_WITH_LIBM OFF CACHE BOOL "")
     endif()
 
+    # Rename XNNPACK's "memory" OBJECT target to "xnnpack-memory" to avoid
+    # collision with abseil-cpp's "memory" INTERFACE target.
+    file(READ "${XNNPACK_SOURCE_DIR}/CMakeLists.txt" _xnnpack_cmake)
+    string(REPLACE "ADD_LIBRARY(memory OBJECT" "ADD_LIBRARY(xnnpack-memory OBJECT" _xnnpack_cmake "${_xnnpack_cmake}")
+    string(REPLACE "SET_TARGET_PROPERTIES(memory " "SET_TARGET_PROPERTIES(xnnpack-memory " _xnnpack_cmake "${_xnnpack_cmake}")
+    string(REPLACE "TARGET_LINK_LIBRARIES(memory " "TARGET_LINK_LIBRARIES(xnnpack-memory " _xnnpack_cmake "${_xnnpack_cmake}")
+    string(REPLACE "TARGET_INCLUDE_DIRECTORIES(memory " "TARGET_INCLUDE_DIRECTORIES(xnnpack-memory " _xnnpack_cmake "${_xnnpack_cmake}")
+    string(REPLACE " memory " " xnnpack-memory " _xnnpack_cmake "${_xnnpack_cmake}")
+    string(REPLACE " memory)" " xnnpack-memory)" _xnnpack_cmake "${_xnnpack_cmake}")
+    file(WRITE "${XNNPACK_SOURCE_DIR}/CMakeLists.txt" "${_xnnpack_cmake}")
+
     add_subdirectory(
       "${XNNPACK_SOURCE_DIR}"
       "${CONFU_DEPENDENCIES_BINARY_DIR}/XNNPACK")

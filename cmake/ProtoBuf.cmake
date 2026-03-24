@@ -48,18 +48,6 @@ macro(custom_protobuf_find)
     set(CMAKE_CXX_FLAGS ${__caffe2_CMAKE_CXX_FLAGS})
   endif()
 
-  # Protobuf "namespaced" target is only added post protobuf 3.5.1. As a
-  # result, for older versions, we will manually add alias.
-  if(NOT TARGET protobuf::libprotobuf)
-    add_library(protobuf::libprotobuf ALIAS libprotobuf)
-    add_library(protobuf::libprotobuf-lite ALIAS libprotobuf-lite)
-    # There is link error when cross compiling protoc on mobile:
-    # https://github.com/protocolbuffers/protobuf/issues/2719
-    # And protoc is very unlikely needed for mobile builds.
-    if(NOT (ANDROID OR IOS))
-      add_executable(protobuf::protoc ALIAS protoc)
-    endif()
-  endif()
 endmacro()
 
 # Main entry for protobuf. If we are building on Android, iOS or we have hard
@@ -100,15 +88,7 @@ get_target_property(__tmp protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
 message(STATUS "Caffe2 protobuf include directory: " ${__tmp})
 include_directories(BEFORE SYSTEM ${__tmp})
 
-# If Protobuf_VERSION is known (true in most cases, false if we are building
-# local protobuf), then we will add a protobuf version check in
-# Caffe2Config.cmake.in.
-if(DEFINED ${Protobuf_VERSION})
-  set(CAFFE2_KNOWN_PROTOBUF_VERSION TRUE)
-else()
-  set(CAFFE2_KNOWN_PROTOBUF_VERSION FALSE)
-  set(Protobuf_VERSION "Protobuf_VERSION_NOTFOUND")
-endif()
+set(CAFFE2_KNOWN_PROTOBUF_VERSION TRUE)
 
 
 # Figure out which protoc to use.
@@ -149,37 +129,17 @@ function(caffe2_protobuf_generate_cpp_py srcs_var hdrs_var python_var)
     # Add TORCH_API prefix to protobuf classes and methods in all cases
     set(DLLEXPORT_STR "dllexport_decl=TORCH_API:")
 
-    # Note: the following depends on PROTOBUF_PROTOC_EXECUTABLE. This
-    # is done to make sure protoc is built before attempting to
-    # generate sources if we're using protoc from the third_party
-    # directory and are building it as part of the Caffe2 build. If
-    # points to an existing path, it is a no-op.
-
-    if(${CAFFE2_LINK_LOCAL_PROTOBUF})
-      add_custom_command(
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.cc"
-               "${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.h"
-               "${CMAKE_CURRENT_BINARY_DIR}/${fil_we}_pb2.py"
-        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}"
-        COMMAND ${CAFFE2_PROTOC_EXECUTABLE} -I${PROJECT_SOURCE_DIR} --cpp_out=${DLLEXPORT_STR}${PROJECT_BINARY_DIR} ${abs_fil}
-        COMMAND ${CAFFE2_PROTOC_EXECUTABLE} -I${PROJECT_SOURCE_DIR} --python_out "${PROJECT_BINARY_DIR}" ${abs_fil}
-        COMMAND ${CMAKE_COMMAND} -DFILENAME=${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.h -DNAMESPACES=caffe\;caffe2\;onnx\;torch -P ${PROJECT_SOURCE_DIR}/cmake/ProtoBufPatch.cmake
-        DEPENDS ${CAFFE2_PROTOC_EXECUTABLE} ${abs_fil}
-        COMMENT "Running C++/Python protocol buffer compiler on ${fil}" VERBATIM )
-    else()
-      add_custom_command(
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.cc"
-               "${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.h"
-               "${CMAKE_CURRENT_BINARY_DIR}/${fil_we}_pb2.py"
-        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}"
-        COMMAND ${CAFFE2_PROTOC_EXECUTABLE} -I${PROJECT_SOURCE_DIR} --cpp_out=${DLLEXPORT_STR}${PROJECT_BINARY_DIR} ${abs_fil}
-        COMMAND ${CAFFE2_PROTOC_EXECUTABLE} -I${PROJECT_SOURCE_DIR} --python_out "${PROJECT_BINARY_DIR}" ${abs_fil}
-        COMMAND ${CMAKE_COMMAND} -DFILENAME=${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.h -DNAMESPACES=caffe\;caffe2\;onnx\;torch -DSYSTEM_PROTOBUF=YES -P ${PROJECT_SOURCE_DIR}/cmake/ProtoBufPatch.cmake
-        DEPENDS ${CAFFE2_PROTOC_EXECUTABLE} ${abs_fil}
-        COMMENT "Running C++/Python protocol buffer compiler on ${fil}" VERBATIM )
-    endif()
+    add_custom_command(
+      OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.cc"
+             "${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.h"
+             "${CMAKE_CURRENT_BINARY_DIR}/${fil_we}_pb2.py"
+      WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}"
+      COMMAND ${CAFFE2_PROTOC_EXECUTABLE} -I${PROJECT_SOURCE_DIR} --cpp_out=${DLLEXPORT_STR}${PROJECT_BINARY_DIR} ${abs_fil}
+      COMMAND ${CAFFE2_PROTOC_EXECUTABLE} -I${PROJECT_SOURCE_DIR} --python_out "${PROJECT_BINARY_DIR}" ${abs_fil}
+      COMMAND ${CMAKE_COMMAND} -DFILENAME=${CMAKE_CURRENT_BINARY_DIR}/${fil_we}.pb.h -P ${PROJECT_SOURCE_DIR}/cmake/ProtoBufPatch.cmake
+      DEPENDS ${CAFFE2_PROTOC_EXECUTABLE} ${abs_fil}
+      COMMENT "Running C++/Python protocol buffer compiler on ${fil}" VERBATIM )
   endforeach()
 
   set_source_files_properties(${${srcs_var}} ${${hdrs_var}} ${${python_var}} PROPERTIES GENERATED TRUE)
