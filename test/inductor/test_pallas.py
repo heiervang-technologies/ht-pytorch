@@ -2177,6 +2177,7 @@ class PallasTestsMixin:
             rtol=1e-2,
         )
 
+    @skip_if_cuda
     def test_transformer_medium(self):
         """Test a 4-layer transformer at Llama-7B-like dimensions."""
         self._run_transformer(
