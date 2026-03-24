@@ -1,3 +1,27 @@
+# ht-pytorch
+
+[Heiervang Technologies](https://github.com/heiervang-technologies) fork of [PyTorch](https://github.com/pytorch/pytorch)
+
+[HT Discussions](https://github.com/orgs/heiervang-technologies/discussions) | [Fork Management Guide](https://github.com/orgs/heiervang-technologies/discussions/3) | [Upstream Project](https://github.com/pytorch/pytorch)
+
+## HT Fork Changes
+
+This is the [Heiervang Technologies](https://github.com/heiervang-technologies) fork of [PyTorch](https://github.com/pytorch/pytorch). The `ht` branch contains the following changes on top of upstream `main`:
+
+| Change | Description | Contributed back? |
+|--------|-------------|-------------------|
+| Native Vulkan compute backend | Training and inference on AMD/Intel/NVIDIA GPUs without CUDA, reviving and modernizing the deprecated `aten/src/ATen/native/vulkan/` code with 83 GLSL compute shaders, Rust device management, and Flash Attention 2 | Planned |
+
+### Branch Strategy
+
+- **`main`** — Clean mirror of upstream `main`. Never commit directly.
+- **`ht`** — Default branch with all HT-specific changes on top of `main`.
+- Feature branches are created from `ht` and merged back via PR.
+
+For questions or discussion about this fork, visit the [HT Discussions](https://github.com/orgs/heiervang-technologies/discussions) page. For details on how we manage forks, see the [Fork Management Guide](https://github.com/orgs/heiervang-technologies/discussions/3).
+
+---
+
 ![PyTorch Logo](https://github.com/pytorch/pytorch/raw/main/docs/source/_static/img/pytorch-logo-dark.png)
 
 --------------------------------------------------------------------------------
