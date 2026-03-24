@@ -40,6 +40,32 @@ macro(custom_protobuf_find)
 
   add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../third_party/protobuf)
 
+  # On aarch64, protobuf+abseil static libs can exceed the ±128MB branch range
+  # when linked into libtorch_cpu.so. Use -mcmodel=large so calls use indirect
+  # addressing with no range limit.
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    # Collect all targets created under the protobuf subdirectory tree
+    # (includes protobuf, abseil fetched via FetchContent, and utf8_range).
+    function(_collect_targets _result _dir)
+      get_property(_targets DIRECTORY "${_dir}" PROPERTY BUILDSYSTEM_TARGETS)
+      set(_acc ${${_result}} ${_targets})
+      get_property(_subdirs DIRECTORY "${_dir}" PROPERTY SUBDIRECTORIES)
+      foreach(_subdir IN LISTS _subdirs)
+        _collect_targets(_acc "${_subdir}")
+      endforeach()
+      set(${_result} ${_acc} PARENT_SCOPE)
+    endfunction()
+
+    set(_protobuf_all_targets "")
+    _collect_targets(_protobuf_all_targets "${CMAKE_CURRENT_LIST_DIR}/../third_party/protobuf")
+    foreach(_tgt IN LISTS _protobuf_all_targets)
+      get_target_property(_type ${_tgt} TYPE)
+      if(_type STREQUAL "STATIC_LIBRARY" OR _type STREQUAL "OBJECT_LIBRARY")
+        target_compile_options(${_tgt} PRIVATE -mcmodel=large)
+      endif()
+    endforeach()
+  endif()
+
   set(CMAKE_POSITION_INDEPENDENT_CODE ${__caffe2_CMAKE_POSITION_INDEPENDENT_CODE})
 
   if(${CAFFE2_LINK_LOCAL_PROTOBUF})
