@@ -143,6 +143,11 @@ fi
 echo "Environment variables"
 env
 
+# Install the pinned triton wheel from the PyTorch nightly channel if not already present.
+if ! python -c "import triton" 2>/dev/null; then
+  install_triton_wheel
+fi
+
 echo "Testing pytorch"
 
 export LANG=C.UTF-8
@@ -246,8 +251,13 @@ if [[ "$BUILD_ENVIRONMENT" == *asan* ]]; then
     export UBSAN_OPTIONS=print_stacktrace=1:suppressions=$PWD/ubsan.supp
     export PYTORCH_TEST_WITH_ASAN=1
     export PYTORCH_TEST_WITH_UBSAN=1
-    # TODO: Figure out how to avoid hard-coding these paths
-    export ASAN_SYMBOLIZER_PATH=/usr/lib/llvm-18/bin/llvm-symbolizer
+    if [ -f /usr/lib/llvm-18/bin/llvm-symbolizer ]; then
+        export ASAN_SYMBOLIZER_PATH=/usr/lib/llvm-18/bin/llvm-symbolizer
+    else
+        # ARC runners install clang-18 under /opt/clang-18 which is on PATH
+        ASAN_SYMBOLIZER_PATH=$(which llvm-symbolizer)
+        export ASAN_SYMBOLIZER_PATH
+    fi
     export TORCH_USE_RTLD_GLOBAL=1
     # NB: We load libtorch.so with RTLD_GLOBAL for UBSAN, unlike our
     # default behavior.
@@ -280,7 +290,19 @@ if [[ "$BUILD_ENVIRONMENT" == *asan* ]]; then
     # it depends on a ton of dynamic libraries that most programs aren't gonna
     # have, and it applies to child processes.
 
+    # The ASAN runtime library name differs between installations:
+    # apt-installed clang uses libclang_rt.asan-x86_64.so (old convention),
+    # tarball clang on ARC runners uses libclang_rt.asan.so (new convention).
     LD_PRELOAD=$(clang --print-file-name=libclang_rt.asan-x86_64.so)
+    if [ "$LD_PRELOAD" = "libclang_rt.asan-x86_64.so" ]; then
+        # clang returns the bare filename when it can't resolve the path,
+        # so fall back to the new naming convention (ARC runners).
+        LD_PRELOAD=$(clang --print-file-name=libclang_rt.asan.so)
+        # ARC runners install clang-18 under /opt/clang-18 without ldconfig
+        # registration, so add the runtime library directory to the search path.
+        LD_LIBRARY_PATH="$(dirname "$LD_PRELOAD")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        export LD_LIBRARY_PATH
+    fi
     export LD_PRELOAD
     # Disable valgrind for asan
     export VALGRIND=OFF
@@ -1767,6 +1789,7 @@ test_vec256() {
 }
 
 test_docs_test() {
+  pip install -r .ci/docker/requirements-docs.txt
   .ci/pytorch/docs-test.sh
 }
 

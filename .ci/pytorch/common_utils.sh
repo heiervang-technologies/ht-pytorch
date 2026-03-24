@@ -148,6 +148,44 @@ function get_pinned_commit() {
   cat .github/ci_commit_pins/"${1}".txt
 }
 
+function install_triton_wheel() {
+  local pinned_commit
+  pinned_commit=$(get_pinned_commit triton)
+  local short_hash="${pinned_commit:0:8}"
+  local index_url="https://download.pytorch.org/whl/nightly/triton/"
+  local python_version
+  # Include the 't' suffix for free-threaded builds to distinguish cp314 from cp314t
+  python_version=$(python -c "import sys; t = 't' if hasattr(sys, '_is_gil_enabled') else ''; print(f'cp{sys.version_info.major}{sys.version_info.minor}{t}')")
+  local arch
+  arch=$(uname -m)
+
+  echo "Looking for triton wheel matching commit ${short_hash} (python=${python_version}, arch=${arch})"
+
+  local wheel
+  wheel=$(curl -sL "${index_url}" | \
+    grep -oP "triton-[^\"]+" | \
+    grep "git${short_hash}" | \
+    grep -- "-${python_version}-${python_version}-" | \
+    grep "${arch}" | \
+    head -1)
+
+  if [ -z "${wheel}" ]; then
+    fatal "No triton wheel found matching commit ${short_hash} for ${python_version} on ${arch}"
+  fi
+
+  echo "Installing triton wheel: ${wheel}"
+  pip install "https://download.pytorch.org/whl/nightly/${wheel}"
+
+  # Verify the installed triton matches the pinned commit
+  local installed_version
+  installed_version=$(pip show triton 2>/dev/null | grep "^Version:" | awk '{print $2}')
+  if [[ "${installed_version}" != *"${short_hash}"* ]]; then
+    fatal "Installed triton version '${installed_version}' does not match pinned commit ${short_hash}"
+  fi
+
+  echo "Successfully installed triton ${installed_version}"
+}
+
 function detect_cuda_arch() {
   if [[ "${BUILD_ENVIRONMENT}" == *cuda* ]]; then
     if command -v nvidia-smi; then
