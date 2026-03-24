@@ -1,0 +1,44 @@
+#version 450
+
+// Parallel reduction: computes the mean of all elements.
+// Same tree reduction as sum.comp, but divides by num_elements at the end.
+// Each workgroup reduces its portion, writes partial sum to output.
+// A second pass (or CPU-side) sums partials and divides by num_elements.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Input { float a[]; };
+layout(set = 0, binding = 1) buffer Output { float result[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+};
+
+shared float sdata[256];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint gid = gl_GlobalInvocationID.x;
+    uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+
+    // Grid-stride loop accumulation.
+    float acc = 0.0;
+    for (uint i = gid; i < num_elements; i += stride) {
+        acc += a[i];
+    }
+    sdata[tid] = acc;
+
+    barrier();
+
+    // Tree reduction.
+    for (uint s = gl_WorkGroupSize.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        result[gl_WorkGroupID.x] = sdata[0];
+    }
+}

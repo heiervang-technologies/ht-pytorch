@@ -1,0 +1,54 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer InputSrc { float src[]; };
+layout(set = 0, binding = 1) writeonly buffer OutputDst { float dst[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+    uint ndim;
+    
+    // sizes
+    uint size0;
+    uint size1;
+    uint size2;
+    uint size3;
+    
+    // src_strides
+    uint src_stride0;
+    uint src_stride1;
+    uint src_stride2;
+    uint src_stride3;
+    uint src_offset;
+    
+    // dst_strides
+    uint dst_stride0;
+    uint dst_stride1;
+    uint dst_stride2;
+    uint dst_stride3;
+    uint dst_offset;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.num_elements) return;
+
+    uint linear_idx = idx;
+    
+    uint i3 = linear_idx % pc.size3;
+    linear_idx /= pc.size3;
+    
+    uint i2 = linear_idx % pc.size2;
+    linear_idx /= pc.size2;
+    
+    uint i1 = linear_idx % pc.size1;
+    linear_idx /= pc.size1;
+    
+    uint i0 = linear_idx;
+
+    uint s_idx = pc.src_offset + i0 * pc.src_stride0 + i1 * pc.src_stride1 + i2 * pc.src_stride2 + i3 * pc.src_stride3;
+    uint d_idx = pc.dst_offset + i0 * pc.dst_stride0 + i1 * pc.dst_stride1 + i2 * pc.dst_stride2 + i3 * pc.dst_stride3;
+
+    dst[d_idx] = src[s_idx];
+}

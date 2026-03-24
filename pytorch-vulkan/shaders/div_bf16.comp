@@ -1,0 +1,54 @@
+#version 450
+
+// Each thread processes TWO elements (one full uint32) to avoid atomic contention.
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer InputA { uint a[]; };
+layout(set = 0, binding = 1) readonly buffer InputB { uint b[]; };
+layout(set = 0, binding = 2) writeonly buffer Output { uint result[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+};
+
+float bf16_to_f32(uint bf16_val) {
+    uint u32_val = bf16_val << 16;
+    return uintBitsToFloat(u32_val);
+}
+
+uint f32_to_bf16(float f32_val) {
+    uint u = floatBitsToUint(f32_val);
+    uint r = u + 0x7FFF + ((u >> 16) & 1);
+    return r >> 16;
+}
+
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    
+    uint start_idx = tid * 2;
+    if (start_idx < num_elements) {
+        uint word_a = a[tid];
+        uint word_b = b[tid];
+        
+        // Lower 16 bits
+        uint a_lo = word_a & 0xFFFF;
+        uint b_lo = word_b & 0xFFFF;
+        float fa_lo = bf16_to_f32(a_lo);
+        float fb_lo = bf16_to_f32(b_lo);
+        uint r_lo = f32_to_bf16(fa_lo / fb_lo);
+        
+        uint packed = r_lo;
+        
+        // Upper 16 bits
+        if (start_idx + 1 < num_elements) {
+            uint a_hi = (word_a >> 16) & 0xFFFF;
+            uint b_hi = (word_b >> 16) & 0xFFFF;
+            float fa_hi = bf16_to_f32(a_hi);
+            float fb_hi = bf16_to_f32(b_hi);
+            uint r_hi = f32_to_bf16(fa_hi / fb_hi);
+            packed |= (r_hi << 16);
+        }
+        
+        result[tid] = packed;
+    }
+}

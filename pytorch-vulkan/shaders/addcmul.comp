@@ -1,0 +1,13 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) buffer InputSelf { float self_data[]; };
+layout(set = 0, binding = 1) buffer InputT1 { float t1[]; };
+layout(set = 0, binding = 2) buffer InputT2 { float t2[]; };
+layout(set = 0, binding = 3) buffer Output { float result[]; };
+layout(push_constant) uniform PushConstants { uint num_elements; float value; };
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < num_elements) {
+        result[idx] = self_data[idx] + value * t1[idx] * t2[idx];
+    }
+}

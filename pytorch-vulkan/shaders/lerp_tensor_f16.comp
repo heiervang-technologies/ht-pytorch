@@ -1,0 +1,21 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) readonly buffer InputA { float16_t a[]; };
+layout(set = 0, binding = 1) readonly buffer InputB { float16_t b[]; };
+layout(set = 0, binding = 2) readonly buffer InputW { float16_t w[]; };
+layout(set = 0, binding = 3) writeonly buffer OutputC { float16_t c[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < pc.num_elements) {
+        float f_a = float(a[idx]);
+        float f_b = float(b[idx]);
+        float f_w = float(w[idx]);
+        c[idx] = float16_t(f_a + f_w * (f_b - f_a));
+    }
+}

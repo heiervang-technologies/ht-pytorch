@@ -1,0 +1,11 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) buffer Input { float a[]; };
+layout(set = 0, binding = 1) buffer Output { float result[]; };
+layout(push_constant) uniform PushConstants { uint num_elements; };
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < num_elements) {
+        result[idx] = inversesqrt(a[idx]);
+    }
+}

@@ -1,0 +1,75 @@
+#version 450
+
+// Fused softmax along the innermost dimension.
+//
+// For input of shape (outer_size, dim_size), computes:
+//   max_val = max(input[outer, :])
+//   output[outer, i] = exp(input[outer, i] - max_val) / sum(exp(input[outer, :] - max_val))
+//
+// Each workgroup handles one "row" (one outer index).
+// Uses shared memory for the max and sum reductions within the row.
+// Dispatch with (outer_size, 1, 1) workgroups.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Input { float a[]; };
+layout(set = 0, binding = 1) buffer Output { float result[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint outer_size;
+    uint dim_size;
+};
+
+shared float sdata[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    if (row >= outer_size) return;
+
+    uint tid = gl_LocalInvocationID.x;
+    uint base = row * dim_size;
+
+    // Phase 1: Find max value in the row (for numerical stability).
+    float thread_max = -1.0 / 0.0;  // -inf
+    for (uint i = tid; i < dim_size; i += gl_WorkGroupSize.x) {
+        thread_max = max(thread_max, a[base + i]);
+    }
+    sdata[tid] = thread_max;
+    barrier();
+
+    // Tree reduction for max.
+    for (uint s = gl_WorkGroupSize.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] = max(sdata[tid], sdata[tid + s]);
+        }
+        barrier();
+    }
+    float row_max = sdata[0];
+    barrier();
+
+    // Phase 2: Compute exp(x - max) and sum.
+    float thread_sum = 0.0;
+    for (uint i = tid; i < dim_size; i += gl_WorkGroupSize.x) {
+        float val = exp(a[base + i] - row_max);
+        result[base + i] = val;  // Store intermediate exp values.
+        thread_sum += val;
+    }
+    sdata[tid] = thread_sum;
+    barrier();
+
+    // Tree reduction for sum.
+    for (uint s = gl_WorkGroupSize.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        barrier();
+    }
+    float row_sum = sdata[0];
+    barrier();
+
+    // Phase 3: Normalize by sum.
+    float inv_sum = 1.0 / row_sum;
+    for (uint i = tid; i < dim_size; i += gl_WorkGroupSize.x) {
+        result[base + i] *= inv_sum;
+    }
+}

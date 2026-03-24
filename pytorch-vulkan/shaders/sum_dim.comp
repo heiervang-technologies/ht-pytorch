@@ -1,0 +1,43 @@
+#version 450
+
+// Dimension-aware reduction: sum along a single axis.
+//
+// For a tensor of shape [..., R, ...] where R is the reduction dimension,
+// this shader sums along R to produce output shape [..., ...].
+//
+// Memory layout: we treat the tensor as (outer_size, reduce_size, inner_size)
+// where outer_size = product of dims before reduce_dim,
+//       reduce_size = size of reduce_dim,
+//       inner_size = product of dims after reduce_dim.
+//
+// Each thread handles one (outer, inner) pair, summing across reduce_size.
+// Dispatch with ceil(outer_size * inner_size / 256) workgroups.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Input { float a[]; };
+layout(set = 0, binding = 1) buffer Output { float result[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint outer_size;
+    uint reduce_size;
+    uint inner_size;
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint total_outputs = outer_size * inner_size;
+
+    if (idx >= total_outputs) return;
+
+    uint outer = idx / inner_size;
+    uint inner = idx % inner_size;
+
+    float acc = 0.0;
+    uint base = outer * reduce_size * inner_size + inner;
+    for (uint r = 0; r < reduce_size; r++) {
+        acc += a[base + r * inner_size];
+    }
+
+    result[idx] = acc;
+}

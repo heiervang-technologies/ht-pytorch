@@ -1,0 +1,42 @@
+#version 450
+
+#define TILE_DIM 16
+#define BLOCK_ROWS 16
+
+layout(local_size_x = TILE_DIM, local_size_y = BLOCK_ROWS, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InputA {
+    float A[];
+};
+
+layout(set = 0, binding = 1) writeonly buffer OutputC {
+    float C[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint M; // rows of input
+    uint N; // cols of input
+} pc;
+
+shared float tile[TILE_DIM][TILE_DIM+1]; // +1 to avoid bank conflicts
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+
+    // Load into shared memory
+    if (x < pc.N && y < pc.M) {
+        tile[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = A[y * pc.N + x];
+    }
+    
+    barrier();
+
+    // Calculate transposed coordinates
+    x = gl_WorkGroupID.y * TILE_DIM + gl_LocalInvocationID.x;
+    y = gl_WorkGroupID.x * TILE_DIM + gl_LocalInvocationID.y;
+
+    // Write to output in transposed order
+    if (x < pc.M && y < pc.N) {
+        C[y * pc.M + x] = tile[gl_LocalInvocationID.x][gl_LocalInvocationID.y];
+    }
+}

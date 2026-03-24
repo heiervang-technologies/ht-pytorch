@@ -1,0 +1,26 @@
+#version 450
+
+// Embedding lookup: gather rows from weight table by index.
+// output[b][s][d] = weight[indices[b][s]][d]
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Weight { float weight[]; };
+layout(set = 0, binding = 1) readonly buffer Indices { int indices[]; };
+layout(set = 0, binding = 2) writeonly buffer Output { float output_data[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint num_indices;  // total number of indices (B * S)
+    uint embedding_dim;
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= num_indices * embedding_dim) return;
+
+    uint token_idx = idx / embedding_dim;
+    uint dim_idx = idx % embedding_dim;
+
+    int row = indices[token_idx];
+    output_data[idx] = weight[row * embedding_dim + dim_idx];
+}

@@ -1,0 +1,112 @@
+#version 450
+
+// Fused softmax along the innermost dimension (BF16 variant).
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Input { uint a[]; };
+layout(set = 0, binding = 1) buffer Output { uint result[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint outer_size;
+    uint dim_size;
+};
+
+shared float sdata[256];
+
+float bf16_to_f32(uint bf16_val) {
+    uint u32_val = bf16_val << 16;
+    return uintBitsToFloat(u32_val);
+}
+
+uint f32_to_bf16(float f32_val) {
+    uint u = floatBitsToUint(f32_val);
+    uint r = u + 0x7FFF + ((u >> 16) & 1);
+    return r >> 16;
+}
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    if (row >= outer_size) return;
+
+    uint tid = gl_LocalInvocationID.x;
+    uint base = row * dim_size;
+
+    // Phase 1: Find max value in the row (for numerical stability).
+    float thread_max = -1.0 / 0.0;  // -inf
+    for (uint i = tid; i < dim_size; i += gl_WorkGroupSize.x) {
+        uint word = a[(base + i) / 2];
+        uint shift = ((base + i) % 2) * 16;
+        uint val_u16 = (word >> shift) & 0xFFFF;
+        float val = bf16_to_f32(val_u16);
+        thread_max = max(thread_max, val);
+    }
+    sdata[tid] = thread_max;
+    barrier();
+
+    // Tree reduction for max.
+    for (uint s = gl_WorkGroupSize.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] = max(sdata[tid], sdata[tid + s]);
+        }
+        barrier();
+    }
+    float row_max = sdata[0];
+    barrier();
+
+    // Phase 2: Compute exp(x - max) and sum.
+    float thread_sum = 0.0;
+    for (uint i = tid; i < dim_size; i += gl_WorkGroupSize.x) {
+        uint word = a[(base + i) / 2];
+        uint shift = ((base + i) % 2) * 16;
+        uint val_u16 = (word >> shift) & 0xFFFF;
+        float val = bf16_to_f32(val_u16);
+        
+        float exp_val = exp(val - row_max);
+        
+        thread_sum += exp_val;
+    }
+    sdata[tid] = thread_sum;
+    barrier();
+
+    // Tree reduction for sum.
+    for (uint s = gl_WorkGroupSize.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        barrier();
+    }
+    float row_sum = sdata[0];
+    barrier();
+
+    // Phase 3: Normalize by sum and pack directly.
+    float inv_sum = 1.0 / row_sum;
+    uint total_uints = (dim_size + 1) / 2;
+    for (uint i = tid; i < total_uints; i += gl_WorkGroupSize.x) {
+        uint word = a[(base / 2) + i];
+        
+        // Lower 16 bits
+        uint val_lo = word & 0xFFFF;
+        float f_lo = bf16_to_f32(val_lo);
+        float norm_lo = exp(f_lo - row_max) * inv_sum;
+        uint bf_lo = f32_to_bf16(norm_lo);
+        
+        uint packed = bf_lo;
+        
+        // Upper 16 bits
+        uint idx1 = i * 2 + 1;
+        if (idx1 < dim_size) {
+            uint val_hi = (word >> 16) & 0xFFFF;
+            float f_hi = bf16_to_f32(val_hi);
+            float norm_hi = exp(f_hi - row_max) * inv_sum;
+            uint bf_hi = f32_to_bf16(norm_hi);
+            packed |= (bf_hi << 16);
+        }
+        
+        // result is a uint[] array. Since outer_size elements exist, the index is:
+        // Wait, base is the element index (e.g. 0, 16, 32).
+        // Since result is a uint[] array, each element holds TWO bf16s.
+        // Therefore the correct index is (base / 2) + i!
+        result[(base / 2) + i] = packed;
+    }
+}

@@ -1,0 +1,76 @@
+#version 450
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InputA { float A[]; };
+layout(set = 0, binding = 1) readonly buffer Weight { float W[]; };
+layout(set = 0, binding = 2) readonly buffer Bias   { float B[]; };
+layout(set = 0, binding = 3) writeonly buffer OutputC { float C[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint outer_size;
+    uint dim_size;
+    float eps;
+    uint has_weight_bias;
+} pc;
+
+shared float s_sum[32];
+shared float s_sum_sq[32];
+shared float s_mean;
+shared float s_var;
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    if (row >= pc.outer_size) return;
+
+    uint tid = gl_LocalInvocationID.x;
+    uint base_idx = row * pc.dim_size;
+
+    // 1. Compute local sum and sum of squares
+    float local_sum = 0.0;
+    float local_sum_sq = 0.0;
+    
+    for (uint i = tid; i < pc.dim_size; i += gl_WorkGroupSize.x) {
+        float val = A[base_idx + i];
+        local_sum += val;
+        local_sum_sq += val * val;
+    }
+    
+    s_sum[tid] = local_sum;
+    s_sum_sq[tid] = local_sum_sq;
+    barrier();
+
+    // 2. Reduce
+    for (uint s = gl_WorkGroupSize.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            s_sum[tid] += s_sum[tid + s];
+            s_sum_sq[tid] += s_sum_sq[tid + s];
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        float mean = s_sum[0] / float(pc.dim_size);
+        float variance = (s_sum_sq[0] / float(pc.dim_size)) - (mean * mean);
+        if (variance < 0.0) variance = 0.0;
+        
+        s_mean = mean;
+        s_var = variance;
+    }
+    barrier();
+
+    // 3. Normalize and apply weight/bias
+    float mean = s_mean;
+    float inv_std = inversesqrt(s_var + pc.eps);
+
+    for (uint i = tid; i < pc.dim_size; i += gl_WorkGroupSize.x) {
+        float val = A[base_idx + i];
+        float norm_val = (val - mean) * inv_std;
+        
+        if (pc.has_weight_bias == 1) {
+            norm_val = norm_val * W[i] + B[i];
+        }
+        
+        C[base_idx + i] = norm_val;
+    }
+}

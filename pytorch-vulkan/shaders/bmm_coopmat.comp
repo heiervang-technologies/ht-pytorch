@@ -1,0 +1,76 @@
+#version 450
+#extension GL_NV_cooperative_matrix : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float32 : enable
+#extension GL_KHR_memory_scope_semantics : enable
+
+// Cooperative matrix (Tensor Core) batched matmul.
+// FP16 inputs, FP16 accumulator, FP16 output.
+//
+// Uses GL_NV_cooperative_matrix (NVIDIA Ampere/Ada/Hopper).
+// Tile size: 16x16x16. Subgroup size = 32.
+// Dispatch: (ceil(N/16), ceil(M/16), Batch)
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InputA {
+    float16_t A[];
+};
+
+layout(set = 0, binding = 1) readonly buffer InputB {
+    float16_t B[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer OutputC {
+    float16_t C[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint Batch;
+    uint M;
+    uint N;
+    uint K;
+} pc;
+
+const uint TILE_M = 16;
+const uint TILE_N = 16;
+const uint TILE_K = 16;
+
+void main() {
+    uint batch_idx = gl_WorkGroupID.z;
+    uint row_block = gl_WorkGroupID.y;
+    uint col_block = gl_WorkGroupID.x;
+
+    uint row_start = row_block * TILE_M;
+    uint col_start = col_block * TILE_N;
+
+    if (row_start >= pc.M || col_start >= pc.N || batch_idx >= pc.Batch) return;
+
+    uint a_offset = batch_idx * pc.M * pc.K;
+    uint b_offset = batch_idx * pc.K * pc.N;
+    uint c_offset = batch_idx * pc.M * pc.N;
+
+    // FP16 input tiles, FP16 accumulator (16 = f16 bits).
+    fcoopmatNV<16, gl_ScopeSubgroup, TILE_M, TILE_K> matA;
+    fcoopmatNV<16, gl_ScopeSubgroup, TILE_K, TILE_N> matB;
+    fcoopmatNV<16, gl_ScopeSubgroup, TILE_M, TILE_N> acc =
+        fcoopmatNV<16, gl_ScopeSubgroup, TILE_M, TILE_N>(float16_t(0.0));
+
+    uint num_tiles = (pc.K + TILE_K - 1) / TILE_K;
+
+    for (uint t = 0; t < num_tiles; t++) {
+        uint k_off = t * TILE_K;
+
+        // Load A tile: row-major, stride = K
+        coopMatLoadNV(matA, A, a_offset + row_start * pc.K + k_off, pc.K, false);
+
+        // Load B tile: row-major, stride = N
+        coopMatLoadNV(matB, B, b_offset + k_off * pc.N + col_start, pc.N, false);
+
+        // FMA: acc += matA * matB
+        acc = coopMatMulAddNV(matA, matB, acc);
+    }
+
+    // Store FP16 result: row-major, stride = N
+    coopMatStoreNV(acc, C, c_offset + row_start * pc.N + col_start, pc.N, false);
+}
