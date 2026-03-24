@@ -39,4 +39,4 @@ NVCC_COPTS = [
 ]
 
 def cu_library(name, srcs, copts = [], **kwargs):
-    cuda_library(name, srcs = srcs, copts = NVCC_COPTS + copts, **kwargs)
+    cuda_library(name = name, srcs = srcs, copts = NVCC_COPTS + copts, **kwargs)

@@ -21,7 +21,7 @@ def define_targets(rules, extra_defines=[]):
         ),
         defines = ["USE_CUDA"] + extra_defines,
         linkstatic = True,
-        local_defines = ["C10_BUILD_MAIN_LIB"],
+        local_defines = ["C10_BUILD_MAIN_LIB", "PYTORCH_C10_DRIVER_API_SUPPORTED"],
         target_compatible_with = rules.requires_cuda(),
         visibility = ["//visibility:public"],
         deps = [

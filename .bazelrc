@@ -29,7 +29,7 @@ build:cpu-only --platform_suffix=-cpu-only
 # doing this. We must also do it for the "-cpu-only" platform suffix.
 build --copt=-isystem --copt=bazel-out/k8-fastbuild-cpu-only/bin
 # rules_cuda configuration
-build:cpu-only --@rules_cuda//cuda:enable_cuda=False
+build:cpu-only --@rules_cuda//cuda:enable=False
 
 # Definition of --config=shell
 # interactive shell immediately before execution
@@ -112,4 +112,6 @@ build --per_file_copt='//:aten/src/ATen/RegisterQuantizedMeta\.cpp$'@-Wno-error=
 build --per_file_copt='//:aten/src/ATen/RegisterZeroTensor\.cpp$'@-Wno-error=unused-function
 build --per_file_copt='//:torch/csrc/lazy/generated/RegisterAutogradLazy\.cpp$'@-Wno-error=unused-function
 build --per_file_copt='//:torch/csrc/lazy/generated/RegisterLazy\.cpp$'@-Wno-error=unused-function
+build --per_file_copt='^//.*\.(cpp|cc)$'@-Wno-error=dangling-reference
 common --enable_bzlmod --enable_workspace
+common --noincompatible_disallow_empty_glob

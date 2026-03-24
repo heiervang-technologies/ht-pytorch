@@ -1,7 +1,6 @@
 def define_targets(rules):
     rules.cc_library(
         name = "macros",
-        srcs = [":cmake_macros_h"],
         hdrs = [
             # Following the example from c10
             "Export.h",
@@ -10,6 +9,7 @@ def define_targets(rules):
         linkstatic = True,
         local_defines = ["C10_BUILD_MAIN_LIB"],
         visibility = ["//visibility:public"],
+        deps = [":cmake_macros_h"],
     )
 
     rules.cmake_configure_file(

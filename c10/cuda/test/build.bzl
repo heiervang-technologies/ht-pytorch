@@ -14,7 +14,7 @@ def define_targets(rules, gtest_deps):
         srcs = [
             "impl/CUDATest.cpp",
         ],
-        target_compatible_with = rules.requires_cuda_enabled(),
+        target_compatible_with = rules.requires_cuda(),
         deps = [
             "//c10/cuda",
         ] + gtest_deps,
@@ -27,7 +27,7 @@ def define_targets(rules, gtest_deps):
             srcs = [
                 src,
             ],
-            target_compatible_with = rules.requires_cuda_enabled(),
+            target_compatible_with = rules.requires_cuda(),
             deps = [
                 "//c10/cuda",
             ] + gtest_deps,

@@ -1,26 +1,7 @@
 workspace(name = "pytorch")
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-load("//tools/rules:workspace.bzl", "new_patched_local_repository")
-
-http_archive(
-    name = "rules_cc",
-    strip_prefix = "rules_cc-40548a2974f1aea06215272d9c2b47a14a24e556",
-    urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/rules_cc/archive/40548a2974f1aea06215272d9c2b47a14a24e556.tar.gz",
-        "https://github.com/bazelbuild/rules_cc/archive/40548a2974f1aea06215272d9c2b47a14a24e556.tar.gz",
-    ],
-)
-
-http_archive(
-    name = "platforms",
-    urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/platforms/releases/download/0.0.10/platforms-0.0.10.tar.gz",
-        # TODO Fix bazel linter to support hashes for release tarballs.
-        # "https://github.com/bazelbuild/platforms/releases/download/0.0.10/platforms-0.0.10.tar.gz",
-    ],
-    # sha256 = "218efe8ee736d26a3572663b374a253c012b716d8af0c07e842e82f238a0a7ee",
-)
+load("//tools/rules:workspace.bzl", "find_cuda", "find_cudnn", "new_patched_local_repository")
 
 load("@rules_cc//cc:repositories.bzl", "rules_cc_toolchains")
 
@@ -31,18 +12,6 @@ http_archive(
     urls = [
         "https://github.com/bazelbuild/bazel-skylib/releases/download/1.0.2/bazel-skylib-1.0.2.tar.gz",
     ],
-)
-
-http_archive(
-    name = "pybind11_bazel",
-    strip_prefix = "pybind11_bazel-b162c7c88a253e3f6b673df0c621aca27596ce6b",
-    urls = ["https://github.com/pybind/pybind11_bazel/archive/b162c7c88a253e3f6b673df0c621aca27596ce6b.zip"],
-)
-
-new_local_repository(
-    name = "pybind11",
-    build_file = "@pybind11_bazel//:pybind11.BUILD",
-    path = "third_party/pybind11",
 )
 
 http_archive(
@@ -78,17 +47,6 @@ new_local_repository(
     name = "onnx",
     build_file = "//third_party:onnx.BUILD",
     path = "third_party/onnx",
-)
-
-local_repository(
-    name = "com_google_protobuf",
-    path = "third_party/protobuf",
-)
-
-new_local_repository(
-    name = "eigen",
-    build_file = "//third_party:eigen.BUILD",
-    path = "third_party/eigen",
 )
 
 new_local_repository(
@@ -146,12 +104,6 @@ new_local_repository(
     path = "third_party/kineto",
 )
 
-# new_local_repository(
-#     name = "opentelemetry-cpp",
-#     build_file = "//third_party::opentelemetry-cpp.BUILD",
-#     path = "third_party/opentelemetry-cpp",
-# )
-
 new_local_repository(
     name = "cpp-httplib",
     build_file = "//third_party:cpp-httplib.BUILD",
@@ -196,52 +148,9 @@ http_archive(
 )
 
 
-load("@rules_python//python:repositories.bzl", "py_repositories")
+find_cuda(name = "cuda")
 
-py_repositories()
-
-load("@rules_python//python:repositories.bzl", "python_register_toolchains")
-
-python_register_toolchains(
-    name = "python3_10",
-    ignore_root_user_error = True,
-    python_version = "3.10",
-)
-
-load("@python3_10//:defs.bzl", "interpreter")
-load("@rules_python//python:pip.bzl", "pip_parse")
-
-pip_parse(
-    name = "pip_deps",
-    python_interpreter_target = interpreter,
-    requirements_lock = "//:tools/build/bazel/requirements.txt",
-)
-
-load("@pip_deps//:requirements.bzl", "install_deps")
-
-install_deps()
-
-load("@pybind11_bazel//:python_configure.bzl", "python_configure")
-
-python_configure(
-    name = "local_config_python",
-)
-
-load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")
-
-protobuf_deps()
-
-new_local_repository(
-    name = "cuda",
-    build_file = "@//third_party:cuda.BUILD",
-    path = "/usr/local/cuda",
-)
-
-new_local_repository(
-    name = "cudnn",
-    build_file = "@//third_party:cudnn.BUILD",
-    path = "/usr/local/cuda",
-)
+find_cudnn(name = "cudnn")
 
 new_local_repository(
     name = "cudnn_frontend",

@@ -60,6 +60,4 @@ Args:
             allow_single_file = True,
         ),
     },
-    # output_to_genfiles is required for header files.
-    output_to_genfiles = True,
 )

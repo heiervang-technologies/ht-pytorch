@@ -534,7 +534,6 @@ cc_library(
             "caffe2/serialize/*.h",
             "caffe2/utils/*.h",
             "caffe2/utils/threadpool/*.h",
-            "modules/**/*.h",
         ],
         exclude = [
             "caffe2/core/macros.h",
@@ -568,7 +567,6 @@ cc_library(
         ":caffe2_perfkernels_avx2",
         "//third_party/miniz-3.0.2:miniz",
         "@com_google_protobuf//:protobuf",
-        "@eigen",
         "@fbgemm//:fbgemm_src_headers",
         "@fmt",
         "@onnx",
@@ -599,7 +597,6 @@ cu_library(
         "@cuda//:cublas",
         "@cuda//:curand",
         "@cudnn",
-        "@eigen",
         "@tensorpipe//:tensorpipe_cuda",
     ],
     alwayslink = True,
@@ -711,7 +708,7 @@ cc_library(
         ":torch_flatbuffers",
         "//c10",
         "@com_github_google_flatbuffers//:flatbuffers",
-        "@local_config_python//:python_headers",
+        "@rules_python//python/cc:current_py_cc_headers",
         "@onnx",
     ],
     alwayslink = True,
@@ -741,24 +738,46 @@ torch_sources = {
     )
 }.keys()
 
+_torch_cuda_excluded = [
+    "torch/csrc/cuda/nccl.cpp",
+    "torch/csrc/cuda/python_nccl.cpp",
+    "torch/csrc/distributed/c10d/NanCheck.cu",
+    "torch/csrc/distributed/c10d/cuda/AsyncMM.cu",
+    "torch/csrc/distributed/c10d/cuda/utils.cpp",
+    "torch/csrc/distributed/c10d/quantization/quantization_gpu.cu",
+    "torch/csrc/distributed/c10d/symm_mem/CUDASymmetricMemory.cu",
+    "torch/csrc/distributed/c10d/symm_mem/CUDASymmetricMemoryOps.cu",
+    "torch/csrc/distributed/c10d/symm_mem/CUDASymmetricMemoryUtils.cpp",
+    "torch/csrc/distributed/c10d/symm_mem/cuda_mem_pool.cpp",
+    "torch/csrc/distributed/c10d/symm_mem/intra_node_comm.cu",
+]
+
+_torch_cuda_all = glob(
+    libtorch_cuda_sources,
+    exclude = _torch_cuda_excluded,
+)
+
+_torch_cuda_cu = [f for f in _torch_cuda_all if f.endswith(".cu")]
+_torch_cuda_cpp = [f for f in _torch_cuda_all if not f.endswith(".cu")]
+
+cu_library(
+    name = "torch_cu",
+    srcs = _torch_cuda_cu,
+    copts = TORCH_COPTS + torch_cuda_half_options,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":caffe2",
+        ":torch_headers",
+        "@cutlass",
+        ":torch_cuda",
+    ],
+    alwayslink = True,
+)
+
 cc_library(
     name = "torch",
-    srcs = if_cuda(glob(
-        libtorch_cuda_sources,
-        exclude = [
-            "torch/csrc/cuda/nccl.cpp",
-            "torch/csrc/cuda/python_nccl.cpp",
-            "torch/csrc/distributed/c10d/NanCheck.cu",
-            "torch/csrc/distributed/c10d/cuda/AsyncMM.cu",
-            "torch/csrc/distributed/c10d/quantization/quantization_gpu.cu",
-            "torch/csrc/distributed/c10d/symm_mem/CUDASymmetricMemory.cu",
-            "torch/csrc/distributed/c10d/symm_mem/CUDASymmetricMemoryOps.cu",
-            "torch/csrc/distributed/c10d/symm_mem/CUDASymmetricMemoryUtils.cpp",
-            "torch/csrc/distributed/c10d/symm_mem/cuda_mem_pool.cpp",
-            "torch/csrc/distributed/c10d/symm_mem/intra_node_comm.cu",
-        ],
-    )) + torch_sources,
-    copts = TORCH_COPTS,
+    srcs = if_cuda(_torch_cuda_cpp) + torch_sources,
+    copts = TORCH_COPTS + if_cuda(["-DTORCH_CUDA_USE_NVTX3"]),
     linkopts = [
       "-lrt",
     ],
@@ -773,9 +792,10 @@ cc_library(
         "@cpp-httplib",
         "@nlohmann",
     ] + if_cuda([
-        "@cuda//:nvToolsExt",
+        "//c10/cuda",
         "@cutlass",
         ":torch_cuda",
+        ":torch_cu",
     ]),
     alwayslink = True,
 )
