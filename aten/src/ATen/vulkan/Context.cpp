@@ -33,6 +33,15 @@ bool is_vulkan_available() {
   return p ? p->is_vulkan_available() : false;
 #endif
 }
+
+void _vulkan_flush() {
+#ifdef USE_VULKAN_API
+  auto* ctx = native::vulkan::api::context();
+  if (ctx) {
+    ctx->flush();
+  }
+#endif
+}
 } // namespace native
 
 } // namespace at

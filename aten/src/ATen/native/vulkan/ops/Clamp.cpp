@@ -503,42 +503,52 @@ Tensor& activation_scalar_(
 
 Tensor gelu(const Tensor& self, std::string_view approximate) {
   TORCH_CHECK(
-      approximate == "tanh", "Vulkan: gelu only supported for tanh type");
+      approximate == "tanh" || approximate == "none",
+      "Vulkan: gelu approximate must be 'tanh' or 'none'");
+
   Scalar kBetaVec = M_SQRT2 * M_2_SQRTPI * 0.5;
   std::vector<Scalar> scalar;
   scalar.push_back(kBetaVec);
 
-  if (self.scalar_type() == at::kQUInt8) {
-    return ops::activation_scalar(
-        self, scalar, VK_KERNEL(quantized_gelu_tanh_quint8));
+  if (approximate == "tanh") {
+    if (self.scalar_type() == at::kQUInt8) {
+      return ops::activation_scalar(
+          self, scalar, VK_KERNEL(quantized_gelu_tanh_quint8));
+    }
+    if (self.scalar_type() == at::kQInt8) {
+      return ops::activation_scalar(
+          self, scalar, VK_KERNEL(quantized_gelu_tanh_qint8));
+    }
+    return ops::activation_scalar(self, scalar, VK_KERNEL(gelu_tanh));
   }
 
-  if (self.scalar_type() == at::kQInt8) {
-    return ops::activation_scalar(
-        self, scalar, VK_KERNEL(quantized_gelu_tanh_qint8));
-  }
-
-  return ops::activation_scalar(self, scalar, VK_KERNEL(gelu_tanh));
+  // approximate == "none": exact GELU using erf approximation
+  return ops::activation_scalar(self, scalar, VK_KERNEL(gelu_none));
 }
 
 Tensor& gelu_(Tensor& self, std::string_view approximate) {
   TORCH_CHECK(
-      approximate == "tanh", "Vulkan: gelu only supported for tanh type");
+      approximate == "tanh" || approximate == "none",
+      "Vulkan: gelu approximate must be 'tanh' or 'none'");
+
   Scalar kBetaVec = M_SQRT2 * M_2_SQRTPI * 0.5;
   std::vector<Scalar> scalar;
   scalar.push_back(kBetaVec);
 
-  if (self.scalar_type() == at::kQUInt8) {
-    return ops::activation_scalar_(
-        self, scalar, VK_KERNEL(quantized_gelu_tanh_quint8_));
+  if (approximate == "tanh") {
+    if (self.scalar_type() == at::kQUInt8) {
+      return ops::activation_scalar_(
+          self, scalar, VK_KERNEL(quantized_gelu_tanh_quint8_));
+    }
+    if (self.scalar_type() == at::kQInt8) {
+      return ops::activation_scalar_(
+          self, scalar, VK_KERNEL(quantized_gelu_tanh_qint8_));
+    }
+    return ops::activation_scalar_(self, scalar, VK_KERNEL(gelu_tanh_));
   }
 
-  if (self.scalar_type() == at::kQInt8) {
-    return ops::activation_scalar_(
-        self, scalar, VK_KERNEL(quantized_gelu_tanh_qint8_));
-  }
-
-  return ops::activation_scalar_(self, scalar, VK_KERNEL(gelu_tanh_));
+  // approximate == "none": exact GELU using erf approximation
+  return ops::activation_scalar_(self, scalar, VK_KERNEL(gelu_none_));
 }
 
 Tensor hardshrink(const Tensor& self_arg, const Scalar& lambd) {

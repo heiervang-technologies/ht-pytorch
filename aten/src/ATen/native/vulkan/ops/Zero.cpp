@@ -1,4 +1,5 @@
 #include <ATen/native/vulkan/ops/Common.h>
+#include <ATen/native/vulkan/ops/Convert.h>
 #include <ATen/native/vulkan/ops/Utils.h>
 #include <torch/library.h>
 
@@ -15,24 +16,18 @@ Tensor& zero_(at::Tensor& self) {
 
   vTensor& v_self = convert(self);
 
-  // Get the global Vulkan context
   api::Context* const context = api::context();
-
-  // Required to determine how to insert memory barriers in the command buffer
   api::PipelineBarrier pipeline_barrier{};
 
+  const auto shader = (v_self.dtype() == api::kBool)
+      ? VK_KERNEL(zero_int) : VK_KERNEL(zero);
+
   context->submit_compute_job(
-      // shader descriptor
-      VK_KERNEL(zero),
-      // pipeline barrier
+      shader,
       pipeline_barrier,
-      // global work group size
       v_self.extents(),
-      // local work group size
       adaptive_work_group_size(v_self.extents()),
-      // fence handle
       VK_NULL_HANDLE,
-      // shader arguments
       v_self.image(
           pipeline_barrier,
           api::PipelineStage::COMPUTE,
@@ -49,31 +44,29 @@ Tensor zeros(
     std::optional<bool> pin_memory) {
   TORCH_CHECK(size.size() <= 4, "Vulkan zeros supports up to 4d tensors");
 
-  // Get the global Vulkan context
   api::Context* const context = api::context();
 
-  // Create the output texture
+  const auto scalar_type = dtype.has_value()
+      ? convert_dtype(dtype.value())
+      : api::ScalarType::Float;
+
   vTensor v_output{
       context,
       size.vec(),
-      api::ScalarType::Float,
+      scalar_type,
   };
 
-  // Required to determine how to insert memory barriers in the command buffer
   api::PipelineBarrier pipeline_barrier{};
 
+  const auto shader = (scalar_type == api::kBool)
+      ? VK_KERNEL(zero_int) : VK_KERNEL(zero);
+
   context->submit_compute_job(
-      // shader descriptor
-      VK_KERNEL(zero),
-      // pipeline barrier
+      shader,
       pipeline_barrier,
-      // global work group size
       v_output.extents(),
-      // local work group size
       adaptive_work_group_size(v_output.extents()),
-      // fence handle
       VK_NULL_HANDLE,
-      // shader arguments
       v_output.image(
           pipeline_barrier,
           api::PipelineStage::COMPUTE,
