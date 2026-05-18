@@ -1,0 +1,12 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) buffer InputA { float a[]; };
+layout(set = 0, binding = 1) buffer InputB { float b[]; };
+layout(set = 0, binding = 2) buffer Output { float result[]; };
+layout(push_constant) uniform PushConstants { uint num_elements; float weight; };
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < num_elements) {
+        result[idx] = a[idx] + weight * (b[idx] - a[idx]);
+    }
+}

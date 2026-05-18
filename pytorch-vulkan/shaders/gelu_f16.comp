@@ -1,0 +1,29 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InputA {
+    float16_t A[];
+};
+
+layout(set = 0, binding = 1) writeonly buffer OutputC {
+    float16_t C[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+} pc;
+
+const float16_t SQRT_2_OVER_PI = float16_t(0.7978845608028654);
+const float16_t COEF = float16_t(0.044715);
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < pc.num_elements) {
+        float16_t x = A[idx];
+        float16_t x3 = x * x * x;
+        float16_t inner = SQRT_2_OVER_PI * (x + COEF * x3);
+        C[idx] = float16_t(0.5) * x * (float16_t(1.0) + tanh(inner));
+    }
+}

@@ -1,0 +1,29 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) buffer Input { float a[]; };
+layout(set = 0, binding = 1) buffer Output { float result[]; };
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+    float exponent;
+};
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < num_elements) {
+        float x = a[idx];
+        // GLSL pow(x,y) is undefined for x<0. Handle negative bases correctly:
+        // For integer exponents, use multiplication. For fractional, use abs+sign.
+        if (x < 0.0) {
+            float ax = abs(x);
+            float r = pow(ax, exponent);
+            // Negative base with even integer exponent -> positive result
+            // Negative base with odd integer exponent -> negative result
+            float int_exp = floor(exponent);
+            if (exponent == int_exp && mod(int_exp, 2.0) != 0.0) {
+                r = -r;
+            }
+            result[idx] = r;
+        } else {
+            result[idx] = pow(x, exponent);
+        }
+    }
+}

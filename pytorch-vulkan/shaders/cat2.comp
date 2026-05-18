@@ -1,0 +1,32 @@
+#version 450
+
+// Concatenate two contiguous tensors along the last dimension.
+// Output[..., 0:size_a] = A, Output[..., size_a:size_a+size_b] = B
+// Each thread copies one element.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer InputA { float a[]; };
+layout(set = 0, binding = 1) readonly buffer InputB { float b[]; };
+layout(set = 0, binding = 2) writeonly buffer Output { float result[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;   // total output elements
+    uint inner_a;        // size of A along cat dim
+    uint inner_b;        // size of B along cat dim
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= num_elements) return;
+
+    uint inner_total = inner_a + inner_b;
+    uint outer_idx = idx / inner_total;
+    uint inner_idx = idx % inner_total;
+
+    if (inner_idx < inner_a) {
+        result[idx] = a[outer_idx * inner_a + inner_idx];
+    } else {
+        result[idx] = b[outer_idx * inner_b + (inner_idx - inner_a)];
+    }
+}

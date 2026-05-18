@@ -1,0 +1,61 @@
+#version 450
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InputA { float A[]; };
+layout(set = 0, binding = 1) readonly buffer Weight { float W[]; };
+layout(set = 0, binding = 2) writeonly buffer OutputC { float C[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint outer_size;
+    uint dim_size;
+    float eps;
+    uint has_weight;
+} pc;
+
+shared float s_sum_sq[32];
+shared float s_var;
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    if (row >= pc.outer_size) return;
+
+    uint tid = gl_LocalInvocationID.x;
+    uint base_idx = row * pc.dim_size;
+
+    float local_sum_sq = 0.0;
+    
+    for (uint i = tid; i < pc.dim_size; i += gl_WorkGroupSize.x) {
+        float val = A[base_idx + i];
+        local_sum_sq += val * val;
+    }
+    
+    s_sum_sq[tid] = local_sum_sq;
+    barrier();
+
+    for (uint s = gl_WorkGroupSize.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            s_sum_sq[tid] += s_sum_sq[tid + s];
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        float variance = s_sum_sq[0] / float(pc.dim_size);
+        s_var = variance;
+    }
+    barrier();
+
+    float inv_std = inversesqrt(s_var + pc.eps);
+
+    for (uint i = tid; i < pc.dim_size; i += gl_WorkGroupSize.x) {
+        float val = A[base_idx + i];
+        float norm_val = val * inv_std;
+        
+        if (pc.has_weight == 1) {
+            norm_val *= W[i];
+        }
+        
+        C[base_idx + i] = norm_val;
+    }
+}

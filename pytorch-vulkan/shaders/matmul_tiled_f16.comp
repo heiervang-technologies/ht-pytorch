@@ -1,0 +1,68 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+#define TILE_SIZE 16
+
+layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InputA {
+    float16_t A[];
+};
+
+layout(set = 0, binding = 1) readonly buffer InputB {
+    float16_t B[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer OutputC {
+    float16_t C[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint M;
+    uint N;
+    uint K;
+} pc;
+
+shared float16_t As[TILE_SIZE][TILE_SIZE];
+shared float16_t Bs[TILE_SIZE][TILE_SIZE];
+
+void main() {
+    uint row = gl_GlobalInvocationID.y;
+    uint col = gl_GlobalInvocationID.x;
+    
+    uint tx = gl_LocalInvocationID.x;
+    uint ty = gl_LocalInvocationID.y;
+
+    float16_t sum = float16_t(0.0);
+
+    // Loop over tiles
+    uint numTiles = (pc.K + TILE_SIZE - 1) / TILE_SIZE;
+    
+    for (uint t = 0; t < numTiles; ++t) {
+        // Load into shared memory with bounds checking
+        if (row < pc.M && (t * TILE_SIZE + tx) < pc.K) {
+            As[ty][tx] = A[row * pc.K + (t * TILE_SIZE + tx)];
+        } else {
+            As[ty][tx] = float16_t(0.0);
+        }
+
+        if ((t * TILE_SIZE + ty) < pc.K && col < pc.N) {
+            Bs[ty][tx] = B[(t * TILE_SIZE + ty) * pc.N + col];
+        } else {
+            Bs[ty][tx] = float16_t(0.0);
+        }
+
+        barrier();
+
+        // Compute partial dot product for this tile
+        for (uint k = 0; k < TILE_SIZE; ++k) {
+            sum += As[ty][k] * Bs[k][tx];
+        }
+
+        barrier();
+    }
+
+    if (row < pc.M && col < pc.N) {
+        C[row * pc.N + col] = sum;
+    }
+}

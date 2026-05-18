@@ -1,0 +1,54 @@
+#version 450
+
+// Fused softmax backward along the innermost dimension.
+//
+// Given grad_output and softmax_output (both shape [outer_size, dim_size]):
+//   dot_sum = sum(grad_output[row, :] * softmax_output[row, :])
+//   grad_input[row, i] = softmax_output[row, i] * (grad_output[row, i] - dot_sum)
+//
+// Each workgroup handles one row. Uses shared memory for the dot-product reduction.
+// Dispatch with (outer_size, 1, 1) workgroups.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer GradOutput { float grad_out[]; };
+layout(set = 0, binding = 1) buffer SoftmaxOutput { float softmax_out[]; };
+layout(set = 0, binding = 2) buffer GradInput { float grad_in[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint outer_size;
+    uint dim_size;
+};
+
+shared float sdata[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    if (row >= outer_size) return;
+
+    uint tid = gl_LocalInvocationID.x;
+    uint base = row * dim_size;
+
+    // Phase 1: Compute dot product sum(grad_output * softmax_output) for this row.
+    float thread_dot = 0.0;
+    for (uint i = tid; i < dim_size; i += gl_WorkGroupSize.x) {
+        thread_dot += grad_out[base + i] * softmax_out[base + i];
+    }
+    sdata[tid] = thread_dot;
+    barrier();
+
+    // Tree reduction for dot product.
+    for (uint s = gl_WorkGroupSize.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        barrier();
+    }
+    float dot_sum = sdata[0];
+    barrier();
+
+    // Phase 2: Compute grad_input = softmax_output * (grad_output - dot_sum).
+    for (uint i = tid; i < dim_size; i += gl_WorkGroupSize.x) {
+        grad_in[base + i] = softmax_out[base + i] * (grad_out[base + i] - dot_sum);
+    }
+}

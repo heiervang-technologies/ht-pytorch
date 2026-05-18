@@ -1,0 +1,117 @@
+#version 450
+#extension GL_EXT_shader_atomic_float : enable
+
+// Flash Attention 2 Backward Pass
+//
+// Recomputes attention using saved LSE to compute dQ, dK, dV
+// without materializing the full N×N attention matrix.
+//
+// Uses atomicAdd for dK/dV accumulation across Q tiles.
+//
+// Dispatch: (ceil(seq_len / TILE_Q), batch * heads, 1)
+// dK and dV buffers must be zero-initialized before dispatch.
+
+layout(local_size_x = 32, local_size_y = 1) in;
+
+layout(set = 0, binding = 0) buffer QueryBuf   { float q_data[]; };
+layout(set = 0, binding = 1) buffer KeyBuf     { float k_data[]; };
+layout(set = 0, binding = 2) buffer ValueBuf   { float v_data[]; };
+layout(set = 0, binding = 3) buffer OutBuf     { float o_data[]; };
+layout(set = 0, binding = 4) buffer GradOutBuf { float do_data[]; };
+layout(set = 0, binding = 5) buffer LseBuf     { float lse_data[]; };
+layout(set = 0, binding = 6) buffer GradQBuf   { float dq_data[]; };
+layout(set = 0, binding = 7) buffer GradKBuf   { float dk_data[]; };
+layout(set = 0, binding = 8) buffer GradVBuf   { float dv_data[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint seq_len;
+    uint d_k;
+    uint d_v;
+    float scale;
+};
+
+const uint TILE_Q = 32;
+const uint TILE_K = 32;
+
+shared float s_S[TILE_Q][TILE_K];  // recomputed attention scores
+
+void main() {
+    uint q_tile_idx = gl_WorkGroupID.x;
+    uint head_idx = gl_WorkGroupID.y;
+    uint tid = gl_LocalInvocationID.x;  // one thread per Q row in tile
+
+    uint q_row = q_tile_idx * TILE_Q + tid;
+    if (q_row >= seq_len) return;
+
+    uint q_base = head_idx * seq_len * d_k + q_row * d_k;
+    uint o_base = head_idx * seq_len * d_v + q_row * d_v;
+    uint lse_idx = head_idx * seq_len + q_row;
+
+    float lse_i = lse_data[lse_idx];
+
+    // Compute D_i = rowsum(dO_i * O_i).
+    float D_i = 0.0;
+    for (uint d = 0; d < d_v; d++) {
+        D_i += do_data[o_base + d] * o_data[o_base + d];
+    }
+
+    // Iterate over K/V tiles.
+    uint num_k_tiles = (seq_len + TILE_K - 1) / TILE_K;
+
+    for (uint kt = 0; kt < num_k_tiles; kt++) {
+        uint k_start = kt * TILE_K;
+
+        // Phase 1: Recompute P_ij = exp(S_ij - LSE_i) for this tile.
+        for (uint kk = 0; kk < TILE_K; kk++) {
+            uint k_idx = k_start + kk;
+            if (k_idx >= seq_len) {
+                s_S[tid][kk] = 0.0;
+                continue;
+            }
+
+            uint k_base = head_idx * seq_len * d_k + k_idx * d_k;
+            float dot = 0.0;
+            for (uint i = 0; i < d_k; i++) {
+                dot += q_data[q_base + i] * k_data[k_base + i];
+            }
+            s_S[tid][kk] = exp(dot * scale - lse_i);
+        }
+
+        // Phase 2: Compute gradients.
+        for (uint kk = 0; kk < TILE_K; kk++) {
+            uint k_idx = k_start + kk;
+            if (k_idx >= seq_len) continue;
+
+            float p_ij = s_S[tid][kk];
+
+            // dP_ij = dO_i . V_j
+            uint v_base = head_idx * seq_len * d_v + k_idx * d_v;
+            float dp_ij = 0.0;
+            for (uint d = 0; d < d_v; d++) {
+                dp_ij += do_data[o_base + d] * v_data[v_base + d];
+            }
+
+            // dS_ij = P_ij * (dP_ij - D_i)
+            float ds_ij = p_ij * (dp_ij - D_i);
+
+            // dQ_i += dS_ij * K_j * scale
+            uint k_base = head_idx * seq_len * d_k + k_idx * d_k;
+            uint dq_base = head_idx * seq_len * d_k + q_row * d_k;
+            for (uint i = 0; i < d_k; i++) {
+                dq_data[dq_base + i] += ds_ij * k_data[k_base + i] * scale;
+            }
+
+            // dK_j += dS_ij * Q_i * scale (atomic across Q tiles)
+            uint dk_base = head_idx * seq_len * d_k + k_idx * d_k;
+            for (uint i = 0; i < d_k; i++) {
+                atomicAdd(dk_data[dk_base + i], ds_ij * q_data[q_base + i] * scale);
+            }
+
+            // dV_j += P_ij * dO_i (atomic across Q tiles)
+            uint dv_base = head_idx * seq_len * d_v + k_idx * d_v;
+            for (uint d = 0; d < d_v; d++) {
+                atomicAdd(dv_data[dv_base + d], p_ij * do_data[o_base + d]);
+            }
+        }
+    }
+}

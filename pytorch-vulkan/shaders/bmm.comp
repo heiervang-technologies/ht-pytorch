@@ -1,0 +1,69 @@
+#version 450
+
+#define TILE_SIZE 16
+
+layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InputA {
+    float A[];
+};
+
+layout(set = 0, binding = 1) readonly buffer InputB {
+    float B[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer OutputC {
+    float C[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint Batch;
+    uint M;
+    uint N;
+    uint K;
+} pc;
+
+shared float As[TILE_SIZE][TILE_SIZE];
+shared float Bs[TILE_SIZE][TILE_SIZE];
+
+void main() {
+    uint batch_idx = gl_WorkGroupID.z;
+    uint row = gl_GlobalInvocationID.y;
+    uint col = gl_GlobalInvocationID.x;
+    
+    uint tx = gl_LocalInvocationID.x;
+    uint ty = gl_LocalInvocationID.y;
+
+    float sum = 0.0;
+    uint numTiles = (pc.K + TILE_SIZE - 1) / TILE_SIZE;
+    
+    uint a_batch_offset = batch_idx * pc.M * pc.K;
+    uint b_batch_offset = batch_idx * pc.K * pc.N;
+    uint c_batch_offset = batch_idx * pc.M * pc.N;
+
+    for (uint t = 0; t < numTiles; ++t) {
+        if (row < pc.M && (t * TILE_SIZE + tx) < pc.K) {
+            As[ty][tx] = A[a_batch_offset + row * pc.K + (t * TILE_SIZE + tx)];
+        } else {
+            As[ty][tx] = 0.0;
+        }
+
+        if ((t * TILE_SIZE + ty) < pc.K && col < pc.N) {
+            Bs[ty][tx] = B[b_batch_offset + (t * TILE_SIZE + ty) * pc.N + col];
+        } else {
+            Bs[ty][tx] = 0.0;
+        }
+
+        barrier();
+
+        for (uint k = 0; k < TILE_SIZE; ++k) {
+            sum += As[ty][k] * Bs[k][tx];
+        }
+
+        barrier();
+    }
+
+    if (row < pc.M && col < pc.N && batch_idx < pc.Batch) {
+        C[c_batch_offset + row * pc.N + col] = sum;
+    }
+}

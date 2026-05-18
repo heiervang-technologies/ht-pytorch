@@ -1,0 +1,3 @@
+[workspace]
+members = ["vulkan-compute"]
+resolver = "2"

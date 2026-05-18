@@ -1,0 +1,185 @@
+#version 450
+
+// Flash Attention 2 Forward Pass - Optimized v2
+//
+// Key optimizations over v1:
+// 1) 256 threads per workgroup (8 threads per query row, 32 rows)
+//    Each sub-thread handles d_v/8 output channels -> 8x V accumulation parallelism
+// 2) Reduced register pressure: thread-local arrays sized to d_v/8 not d_v
+// 3) Cooperative K tile loading (all 256 threads load in parallel)
+// 4) Shared memory score broadcast for V accumulation
+//
+// Dispatch: (ceil(seq_len / TILE_Q), batch * heads, 1)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer QueryBuf  { float q_data[]; };
+layout(set = 0, binding = 1) readonly buffer KeyBuf    { float k_data[]; };
+layout(set = 0, binding = 2) readonly buffer ValueBuf  { float v_data[]; };
+layout(set = 0, binding = 3) writeonly buffer OutBuf   { float o_data[]; };
+layout(set = 0, binding = 4) buffer LseBuf             { float lse_data[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint seq_len;
+    uint d_k;
+    uint d_v;
+    float scale;
+};
+
+const uint TILE_Q = 32;    // query rows per workgroup
+const uint TILE_K = 32;    // K/V rows per tile
+const uint THREADS_PER_ROW = 8;  // threads collaborating on each query row
+
+// Shared memory
+shared float s_K[TILE_K][64];      // K tile (max d_k=64)
+shared float s_scores[TILE_Q][TILE_K];  // attention scores broadcast
+shared float s_V[TILE_K][64];      // V tile (max d_v=64)
+
+void main() {
+    uint head_idx = gl_WorkGroupID.y;
+    uint q_tile_idx = gl_WorkGroupID.x;
+
+    // Thread decomposition: 256 threads = 32 rows x 8 sub-threads
+    uint row_in_tile = gl_LocalInvocationID.x / THREADS_PER_ROW;  // [0, 31]
+    uint sub_tid = gl_LocalInvocationID.x % THREADS_PER_ROW;      // [0, 7]
+    uint tid = gl_LocalInvocationID.x;  // [0, 255]
+
+    uint q_row = q_tile_idx * TILE_Q + row_in_tile;
+    bool valid_q = q_row < seq_len;
+
+    uint q_base = head_idx * seq_len * d_k + q_row * d_k;
+    uint o_base = head_idx * seq_len * d_v + q_row * d_v;
+
+    // Each sub-thread handles a slice of d_v outputs.
+    uint d_per_thread = (d_v + THREADS_PER_ROW - 1) / THREADS_PER_ROW;
+    uint d_start = sub_tid * d_per_thread;
+    uint d_end = min(d_start + d_per_thread, d_v);
+
+    // Load Q row into registers (only sub_tid==0 needs full Q for dot product,
+    // but all threads load it for simplicity since d_k is small).
+    float q_reg[64];
+    if (valid_q) {
+        for (uint i = 0; i < d_k; i++) {
+            q_reg[i] = q_data[q_base + i];
+        }
+    }
+
+    // Output accumulator (each thread handles d_per_thread channels).
+    float o_acc[8];  // max d_per_thread = ceil(64/8) = 8
+    for (uint i = 0; i < 8; i++) o_acc[i] = 0.0;
+
+    float m_i = -1.0 / 0.0;  // -inf
+    float l_i = 0.0;
+
+    uint num_k_tiles = (seq_len + TILE_K - 1) / TILE_K;
+
+    for (uint kt = 0; kt < num_k_tiles; kt++) {
+        uint k_start = kt * TILE_K;
+
+        // --- Cooperative K tile load (256 threads load 32 x d_k elements) ---
+        // Each thread loads ~(32*d_k)/256 elements.
+        uint total_k_elems = TILE_K * d_k;
+        for (uint i = tid; i < total_k_elems; i += 256) {
+            uint kr = i / d_k;
+            uint kc = i % d_k;
+            uint global_k = k_start + kr;
+            if (global_k < seq_len) {
+                s_K[kr][kc] = k_data[head_idx * seq_len * d_k + global_k * d_k + kc];
+            }
+        }
+        barrier();
+
+        // --- Compute scores (only sub_tid==0 computes, then broadcasts) ---
+        if (sub_tid == 0 && valid_q) {
+            float local_max = -1.0 / 0.0;
+            for (uint kk = 0; kk < TILE_K; kk++) {
+                if (k_start + kk >= seq_len) {
+                    s_scores[row_in_tile][kk] = -1.0 / 0.0;
+                    continue;
+                }
+                float dot = 0.0;
+                for (uint i = 0; i < d_k; i++) {
+                    dot += q_reg[i] * s_K[kk][i];
+                }
+                float s = dot * scale;
+                s_scores[row_in_tile][kk] = s;
+                local_max = max(local_max, s);
+            }
+
+            // Online softmax update
+            float m_new = max(m_i, local_max);
+            float tile_sum = 0.0;
+            for (uint kk = 0; kk < TILE_K; kk++) {
+                if (k_start + kk >= seq_len) break;
+                s_scores[row_in_tile][kk] = exp(s_scores[row_in_tile][kk] - m_new);
+                tile_sum += s_scores[row_in_tile][kk];
+            }
+
+            float alpha = exp(m_i - m_new);
+            float l_new = alpha * l_i + tile_sum;
+
+            // Store rescale factors in lse_data temporarily (will overwrite at end).
+            // Actually, just store in shared memory. Use s_K[row_in_tile] as temp.
+            s_K[row_in_tile][0] = (l_i > 0.0) ? (alpha * l_i / l_new) : 0.0;  // rescale
+            s_K[row_in_tile][1] = (l_new > 0.0) ? (1.0 / l_new) : 0.0;        // new_weight
+            s_K[row_in_tile][2] = m_new;
+            s_K[row_in_tile][3] = l_new;
+        }
+        barrier();  // All threads see scores and rescale factors
+
+        // Read rescale factors (written by sub_tid==0)
+        float rescale = s_K[row_in_tile][0];
+        float new_weight = s_K[row_in_tile][1];
+
+        // Rescale old O
+        if (valid_q) {
+            for (uint i = 0; i < d_per_thread && (d_start + i) < d_v; i++) {
+                o_acc[i] *= rescale;
+            }
+        }
+
+        // Update m_i, l_i from shared mem
+        if (sub_tid == 0 && valid_q) {
+            m_i = s_K[row_in_tile][2];
+            l_i = s_K[row_in_tile][3];
+        }
+
+        // --- Cooperative V tile load ---
+        uint total_v_elems = TILE_K * d_v;
+        for (uint i = tid; i < total_v_elems; i += 256) {
+            uint vr = i / d_v;
+            uint vc = i % d_v;
+            uint global_v = k_start + vr;
+            if (global_v < seq_len) {
+                s_V[vr][vc] = v_data[head_idx * seq_len * d_v + global_v * d_v + vc];
+            }
+        }
+        barrier();
+
+        // --- Accumulate P @ V (each thread handles its d_v slice) ---
+        if (valid_q) {
+            for (uint i = 0; i < d_per_thread && (d_start + i) < d_v; i++) {
+                float pv = 0.0;
+                uint d = d_start + i;
+                for (uint kk = 0; kk < TILE_K; kk++) {
+                    if (k_start + kk >= seq_len) break;
+                    pv += s_scores[row_in_tile][kk] * s_V[kk][d];
+                }
+                o_acc[i] += new_weight * pv;
+            }
+        }
+        barrier();
+    }
+
+    // Write output (each thread writes its slice of d_v)
+    if (valid_q) {
+        for (uint i = 0; i < d_per_thread && (d_start + i) < d_v; i++) {
+            o_data[o_base + d_start + i] = o_acc[i];
+        }
+
+        // Only sub_tid==0 writes LSE
+        if (sub_tid == 0) {
+            lse_data[head_idx * seq_len + q_row] = m_i + log(l_i);
+        }
+    }
+}

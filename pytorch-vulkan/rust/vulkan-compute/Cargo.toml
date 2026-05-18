@@ -1,0 +1,17 @@
+[package]
+name = "vulkan-compute"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+ash = "0.38"
+gpu-allocator = { version = "0.27", features = ["vulkan"] }
+log = "0.4"
+env_logger = "0.11"
+thiserror = "2"
+
+[build-dependencies]
+cbindgen = "0.27"

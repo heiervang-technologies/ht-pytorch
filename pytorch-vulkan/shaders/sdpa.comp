@@ -1,0 +1,118 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+
+// Fused Scaled Dot-Product Attention (SDPA) kernel.
+//
+// Computes: output = softmax(Q @ K^T / sqrt(d_k)) @ V
+//
+// For a single attention head:
+//   Q: (seq_len, d_k)
+//   K: (seq_len, d_k)
+//   V: (seq_len, d_v)
+//   output: (seq_len, d_v)
+//
+// Each workgroup handles one query row (one row of the output).
+// The kernel fuses: matmul(Q_row, K^T) -> scale -> softmax -> matmul(attn, V)
+// all in shared memory to minimize global memory traffic.
+//
+// Dispatch with (seq_len, batch_heads, 1) workgroups where
+// batch_heads = batch_size * num_heads.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer QueryBuf { float q_data[]; };
+layout(set = 0, binding = 1) buffer KeyBuf   { float k_data[]; };
+layout(set = 0, binding = 2) buffer ValueBuf { float v_data[]; };
+layout(set = 0, binding = 3) buffer OutBuf   { float out_data[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint seq_len;      // sequence length (both Q and K)
+    uint d_k;          // key/query dimension
+    uint d_v;          // value dimension
+    float scale;       // 1.0 / sqrt(d_k)
+};
+
+// Shared memory for attention scores and reductions.
+shared float attn_scores[256];
+shared float smax[256];
+shared float ssum[256];
+
+void main() {
+    uint query_idx = gl_WorkGroupID.x;   // which query row
+    uint head_idx = gl_WorkGroupID.y;    // which batch*head
+    uint tid = gl_LocalInvocationID.x;
+
+    if (query_idx >= seq_len) return;
+
+    // Base offsets into the flattened (batch_heads, seq_len, dim) tensors.
+    uint q_base = head_idx * seq_len * d_k + query_idx * d_k;
+    uint k_head_base = head_idx * seq_len * d_k;
+    uint v_head_base = head_idx * seq_len * d_v;
+    uint o_base = head_idx * seq_len * d_v + query_idx * d_v;
+
+    // --- Phase 1: Compute Q_row @ K^T -> attn_scores[seq_len] ---
+    // Each thread computes one dot product: Q[query_idx] . K[tid]
+    if (tid < seq_len) {
+        float dot = 0.0;
+        for (uint i = 0; i < d_k; i++) {
+            dot += q_data[q_base + i] * k_data[k_head_base + tid * d_k + i];
+        }
+        attn_scores[tid] = dot * scale;
+    } else {
+        attn_scores[tid] = -1.0 / 0.0;  // -inf for padding
+    }
+    barrier();
+
+    // --- Phase 2: Softmax over attn_scores ---
+    // Find max (tree reduction).
+    // Use tid < 256 threads, reduce over seq_len values.
+    float thread_max = (tid < seq_len) ? attn_scores[tid] : (-1.0 / 0.0);
+
+    // Store for reduction.
+    // We reuse attn_scores for the reduction since we already read our value.
+    barrier();
+
+    // Tree max reduction in shared memory.
+    smax[tid] = thread_max;
+    barrier();
+    for (uint s = gl_WorkGroupSize.x / 2; s > 0; s >>= 1) {
+        if (tid < s) smax[tid] = max(smax[tid], smax[tid + s]);
+        barrier();
+    }
+    float row_max = smax[0];
+    barrier();
+
+    // Compute exp(score - max) and sum.
+    float exp_val = 0.0;
+    if (tid < seq_len) {
+        exp_val = exp(attn_scores[tid] - row_max);
+        attn_scores[tid] = exp_val;
+    }
+    barrier();
+
+    ssum[tid] = (tid < seq_len) ? exp_val : 0.0;
+    barrier();
+    for (uint s = gl_WorkGroupSize.x / 2; s > 0; s >>= 1) {
+        if (tid < s) ssum[tid] += ssum[tid + s];
+        barrier();
+    }
+    float row_sum = ssum[0];
+    barrier();
+
+    // Normalize.
+    if (tid < seq_len) {
+        attn_scores[tid] /= row_sum;
+    }
+    barrier();
+
+    // --- Phase 3: attn_scores @ V -> output row ---
+    // Each thread computes one element of the output: out[query_idx, tid]
+    // by dotting attn_scores[seq_len] with V[:, tid].
+    if (tid < d_v) {
+        float acc = 0.0;
+        for (uint s = 0; s < seq_len; s++) {
+            acc += attn_scores[s] * v_data[v_head_base + s * d_v + tid];
+        }
+        out_data[o_base + tid] = acc;
+    }
+}
