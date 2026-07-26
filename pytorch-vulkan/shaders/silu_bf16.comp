@@ -23,21 +23,21 @@ uint f32_to_bf16(float f32_val) {
 
 void main() {
     uint tid = gl_GlobalInvocationID.x;
-    
+
     // Each thread handles 2 elements.
     uint start_idx = tid * 2;
-    
+
     if (start_idx < num_elements) {
         uint word = a[tid];
-        
+
         // Lower 16 bits
         uint val_lo = word & 0xFFFF;
         float x_lo = bf16_to_f32(val_lo);
         float s_lo = x_lo / (1.0 + exp(-x_lo));
         uint r_lo = f32_to_bf16(s_lo);
-        
+
         uint packed = r_lo;
-        
+
         // Upper 16 bits
         if (start_idx + 1 < num_elements) {
             uint val_hi = (word >> 16) & 0xFFFF;
@@ -46,7 +46,7 @@ void main() {
             uint r_hi = f32_to_bf16(s_hi);
             packed |= (r_hi << 16);
         }
-        
+
         result[tid] = packed;
     }
 }

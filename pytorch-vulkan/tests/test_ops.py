@@ -8,6 +8,7 @@ import torch.nn as nn
 @pytest.fixture(autouse=True)
 def init_vulkan():
     from pytorch_vulkan import init
+
     init()
 
 
@@ -24,6 +25,7 @@ def close(a, b, atol=1e-4):
 
 
 # --- View / Reshape ---
+
 
 class TestViewReshape:
     def test_view_3d_to_2d(self):
@@ -51,6 +53,7 @@ class TestViewReshape:
 
 # --- Embedding ---
 
+
 class TestEmbedding:
     def test_basic_embedding(self):
         embed = nn.Embedding(100, 32).to("vkgpu:0")
@@ -68,9 +71,11 @@ class TestEmbedding:
 
 # --- Softmax ---
 
+
 class TestSoftmax:
     def test_softmax_2d_last_dim(self):
         from pytorch_vulkan import register
+
         register()
 
         @torch.compile(backend="vulkan")
@@ -85,6 +90,7 @@ class TestSoftmax:
 
     def test_softmax_row_sums(self):
         from pytorch_vulkan import register
+
         register()
 
         @torch.compile(backend="vulkan")
@@ -98,6 +104,7 @@ class TestSoftmax:
 
     def test_softmax_all_positive(self):
         from pytorch_vulkan import register
+
         register()
 
         @torch.compile(backend="vulkan")
@@ -111,9 +118,11 @@ class TestSoftmax:
 
 # --- Dim-aware Reductions ---
 
+
 class TestDimReductions:
     def test_sum_dim0(self):
         from pytorch_vulkan import register
+
         register()
 
         @torch.compile(backend="vulkan")
@@ -128,6 +137,7 @@ class TestDimReductions:
 
     def test_sum_dim1(self):
         from pytorch_vulkan import register
+
         register()
 
         @torch.compile(backend="vulkan")
@@ -142,6 +152,7 @@ class TestDimReductions:
 
     def test_mean_dim(self):
         from pytorch_vulkan import register
+
         register()
 
         @torch.compile(backend="vulkan")
@@ -157,11 +168,12 @@ class TestDimReductions:
 
 # --- Transformer Integration ---
 
+
 class TestTransformer:
     def test_encoder_layer_shapes(self):
         layer = nn.TransformerEncoderLayer(
-            d_model=32, nhead=4, dim_feedforward=64,
-            dropout=0.0, batch_first=True).to("vkgpu:0")
+            d_model=32, nhead=4, dim_feedforward=64, dropout=0.0, batch_first=True
+        ).to("vkgpu:0")
         x = vk(torch.randn(2, 8, 32))
         out = layer(x)
         assert out.shape == (2, 8, 32)
@@ -169,6 +181,7 @@ class TestTransformer:
 
     def test_transformer_training_step(self):
         from pytorch_vulkan import register_training
+
         register_training()
 
         class TinyModel(nn.Module):
@@ -176,8 +189,12 @@ class TestTransformer:
                 super().__init__()
                 self.embed = nn.Embedding(64, 32)
                 self.encoder = nn.TransformerEncoderLayer(
-                    d_model=32, nhead=4, dim_feedforward=64,
-                    dropout=0.0, batch_first=True)
+                    d_model=32,
+                    nhead=4,
+                    dim_feedforward=64,
+                    dropout=0.0,
+                    batch_first=True,
+                )
                 self.head = nn.Linear(32, 64)
 
             def forward(self, x):
@@ -191,8 +208,7 @@ class TestTransformer:
         target = torch.randint(0, 64, (2, 4), device="vkgpu:0")
 
         logits = compiled(x)
-        loss = nn.functional.cross_entropy(
-            logits.reshape(-1, 64), target.reshape(-1))
+        loss = nn.functional.cross_entropy(logits.reshape(-1, 64), target.reshape(-1))
         loss.backward()
         opt.step()
 

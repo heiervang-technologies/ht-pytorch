@@ -4,12 +4,14 @@
 layout(local_size_x = 256) in;
 
 layout(set = 0, binding = 0) readonly buffer Weight { float16_t weight[]; };
-layout(set = 0, binding = 1) readonly buffer Indices { int indices[]; };
+layout(set = 0, binding = 1) readonly buffer Indices { uint index_words[]; };
 layout(set = 0, binding = 2) writeonly buffer Output { float16_t output_data[]; };
 
 layout(push_constant) uniform PushConstants {
     uint num_indices;
     uint embedding_dim;
+    uint num_weights;
+    uint index_word_stride;
 };
 
 void main() {
@@ -17,6 +19,13 @@ void main() {
     if (idx >= num_indices * embedding_dim) return;
     uint token_idx = idx / embedding_dim;
     uint dim_idx = idx % embedding_dim;
-    int row = indices[token_idx];
-    output_data[idx] = weight[row * embedding_dim + dim_idx];
+    uint word = token_idx * index_word_stride;
+    uint row = index_words[word];
+    bool valid = int(row) >= 0 && row < num_weights;
+    if (index_word_stride == 2) {
+        valid = valid && index_words[word + 1] == 0;
+    }
+    output_data[idx] = valid
+        ? weight[row * embedding_dim + dim_idx]
+        : float16_t(0.0);
 }

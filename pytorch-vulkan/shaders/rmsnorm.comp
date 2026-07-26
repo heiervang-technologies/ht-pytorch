@@ -5,6 +5,7 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 layout(set = 0, binding = 0) readonly buffer InputA { float A[]; };
 layout(set = 0, binding = 1) readonly buffer Weight { float W[]; };
 layout(set = 0, binding = 2) writeonly buffer OutputC { float C[]; };
+layout(set = 0, binding = 3) writeonly buffer Rstd { float rstd_data[]; };
 
 layout(push_constant) uniform PushConstants {
     uint outer_size;
@@ -24,12 +25,12 @@ void main() {
     uint base_idx = row * pc.dim_size;
 
     float local_sum_sq = 0.0;
-    
+
     for (uint i = tid; i < pc.dim_size; i += gl_WorkGroupSize.x) {
         float val = A[base_idx + i];
         local_sum_sq += val * val;
     }
-    
+
     s_sum_sq[tid] = local_sum_sq;
     barrier();
 
@@ -47,15 +48,18 @@ void main() {
     barrier();
 
     float inv_std = inversesqrt(s_var + pc.eps);
+    if (tid == 0) {
+        rstd_data[row] = inv_std;
+    }
 
     for (uint i = tid; i < pc.dim_size; i += gl_WorkGroupSize.x) {
         float val = A[base_idx + i];
         float norm_val = val * inv_std;
-        
+
         if (pc.has_weight == 1) {
             norm_val *= W[i];
         }
-        
+
         C[base_idx + i] = norm_val;
     }
 }

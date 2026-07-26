@@ -1,0 +1,76 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Src {
+    uint source_words[];
+};
+layout(set = 0, binding = 1) writeonly buffer Dst {
+    float destination[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+    uint ndim;
+    uint size0;
+    uint size1;
+    uint size2;
+    uint size3;
+    uint src_stride0;
+    uint src_stride1;
+    uint src_stride2;
+    uint src_stride3;
+    uint src_offset;
+    uint dst_stride0;
+    uint dst_stride1;
+    uint dst_stride2;
+    uint dst_stride3;
+    uint dst_offset;
+} pc;
+
+uint physical_index(
+    uint index,
+    uint stride0,
+    uint stride1,
+    uint stride2,
+    uint stride3
+) {
+    uint coordinate3 = index % pc.size3;
+    index /= pc.size3;
+    uint coordinate2 = index % pc.size2;
+    index /= pc.size2;
+    uint coordinate1 = index % pc.size1;
+    uint coordinate0 = index / pc.size1;
+    return coordinate0 * stride0 + coordinate1 * stride1 +
+        coordinate2 * stride2 + coordinate3 * stride3;
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= pc.num_elements) {
+        return;
+    }
+    uint source_index = pc.src_offset + physical_index(
+        index,
+        pc.src_stride0,
+        pc.src_stride1,
+        pc.src_stride2,
+        pc.src_stride3
+    );
+    uint destination_index = pc.dst_offset + physical_index(
+        index,
+        pc.dst_stride0,
+        pc.dst_stride1,
+        pc.dst_stride2,
+        pc.dst_stride3
+    );
+    uint low = source_words[source_index * 2];
+    uint high = source_words[source_index * 2 + 1];
+    bool negative = (high & 0x80000000u) != 0;
+    if (negative) {
+        low = ~low + 1;
+        high = ~high + uint(low == 0);
+    }
+    float magnitude = float(high) * 4294967296.0 + float(low);
+    destination[destination_index] = negative ? -magnitude : magnitude;
+}

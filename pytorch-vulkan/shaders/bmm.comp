@@ -30,13 +30,13 @@ void main() {
     uint batch_idx = gl_WorkGroupID.z;
     uint row = gl_GlobalInvocationID.y;
     uint col = gl_GlobalInvocationID.x;
-    
+
     uint tx = gl_LocalInvocationID.x;
     uint ty = gl_LocalInvocationID.y;
 
     float sum = 0.0;
     uint numTiles = (pc.K + TILE_SIZE - 1) / TILE_SIZE;
-    
+
     uint a_batch_offset = batch_idx * pc.M * pc.K;
     uint b_batch_offset = batch_idx * pc.K * pc.N;
     uint c_batch_offset = batch_idx * pc.M * pc.N;

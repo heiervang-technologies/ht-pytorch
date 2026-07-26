@@ -6,3 +6,4 @@ build/
 __pycache__/
 .pytest_cache/
 csrc/generated/
+pytorch_vulkan/_shaders/

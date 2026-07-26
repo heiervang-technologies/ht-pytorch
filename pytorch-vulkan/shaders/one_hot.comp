@@ -1,0 +1,52 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Input {
+    uint input_words[];
+};
+layout(set = 0, binding = 1) writeonly buffer Output {
+    uint output_words[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+    uint num_classes;
+    uint ndim;
+    uint size0;
+    uint size1;
+    uint size2;
+    uint size3;
+    uint stride0;
+    uint stride1;
+    uint stride2;
+    uint stride3;
+    uint storage_offset;
+} pc;
+
+uint input_index(uint index) {
+    uint coordinate3 = index % pc.size3;
+    index /= pc.size3;
+    uint coordinate2 = index % pc.size2;
+    index /= pc.size2;
+    uint coordinate1 = index % pc.size1;
+    uint coordinate0 = index / pc.size1;
+    return pc.storage_offset + coordinate0 * pc.stride0 +
+        coordinate1 * pc.stride1 + coordinate2 * pc.stride2 +
+        coordinate3 * pc.stride3;
+}
+
+void main() {
+    uint output_index = gl_GlobalInvocationID.x;
+    if (output_index >= pc.num_elements * pc.num_classes) {
+        return;
+    }
+    uint logical_input = output_index / pc.num_classes;
+    uint class_index = output_index % pc.num_classes;
+    uint source = input_index(logical_input);
+    uint value_low = input_words[source * 2];
+    uint value_high = input_words[source * 2 + 1];
+    uint value = value_high == 0 && value_low == class_index ? 1 : 0;
+    output_words[output_index * 2] = value;
+    output_words[output_index * 2 + 1] = 0;
+}

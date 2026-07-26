@@ -7,6 +7,7 @@ import torch
 def requires_vulkan(fn):
     try:
         from pytorch_vulkan import init, is_available
+
         init()
         available = is_available()
     except ImportError:
@@ -16,7 +17,8 @@ def requires_vulkan(fn):
 
 @requires_vulkan
 def test_device_available():
-    from pytorch_vulkan import is_available, device_count, device_name
+    from pytorch_vulkan import device_count, device_name, is_available
+
     assert is_available()
     assert device_count() >= 1
     assert len(device_name()) > 0
@@ -40,6 +42,7 @@ def test_cpu_to_vulkan_roundtrip():
 @requires_vulkan
 def test_torch_compile_basic():
     from pytorch_vulkan import register
+
     register()
 
     @torch.compile(backend="vulkan")
@@ -51,9 +54,11 @@ def test_torch_compile_basic():
     result = fn(x, y)
     assert result.shape == (4,)
 
+
 @requires_vulkan
 def test_torch_compile_unary_ops():
     from pytorch_vulkan import register
+
     register()
 
     @torch.compile(backend="vulkan")
@@ -69,6 +74,7 @@ def test_torch_compile_unary_ops():
 @requires_vulkan
 def test_torch_compile_sigmoid():
     from pytorch_vulkan import register
+
     register()
 
     @torch.compile(backend="vulkan")
@@ -85,6 +91,7 @@ def test_torch_compile_sigmoid():
 def test_torch_compile_sum():
     """Test parallel reduction sum."""
     from pytorch_vulkan import register
+
     register()
 
     @torch.compile(backend="vulkan")
@@ -101,6 +108,7 @@ def test_torch_compile_sum():
 def test_torch_compile_sum_large():
     """Test multi-pass reduction with >256 workgroups."""
     from pytorch_vulkan import register
+
     register()
 
     @torch.compile(backend="vulkan")
@@ -118,6 +126,7 @@ def test_torch_compile_sum_large():
 def test_torch_compile_mean():
     """Test parallel reduction mean."""
     from pytorch_vulkan import register
+
     register()
 
     @torch.compile(backend="vulkan")
@@ -133,6 +142,7 @@ def test_torch_compile_mean():
 @requires_vulkan
 def test_torch_compile_matmul():
     from pytorch_vulkan import register
+
     register()
 
     @torch.compile(backend="vulkan")
@@ -144,9 +154,11 @@ def test_torch_compile_matmul():
     result = fn(a, b)
     assert result.shape == (16, 16)
 
+
 @requires_vulkan
 def test_torch_compile_transpose():
     from pytorch_vulkan import register
+
     register()
 
     @torch.compile(backend="vulkan")
@@ -157,9 +169,11 @@ def test_torch_compile_transpose():
     result = fn(x)
     assert result.shape == (20, 10)
 
+
 @requires_vulkan
 def test_torch_compile_ones_like():
     from pytorch_vulkan import register
+
     register()
 
     @torch.compile(backend="vulkan")
@@ -170,9 +184,11 @@ def test_torch_compile_ones_like():
     result = fn(x)
     assert result.shape == (15,)
 
+
 @requires_vulkan
 def test_torch_compile_bmm():
     from pytorch_vulkan import register
+
     register()
 
     @torch.compile(backend="vulkan")
@@ -183,4 +199,3 @@ def test_torch_compile_bmm():
     b = torch.randn(4, 32, 16, device="vkgpu:0")
     result = fn(a, b)
     assert result.shape == (4, 16, 16)
-

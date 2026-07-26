@@ -52,7 +52,7 @@ For each block of queries Q_i:
 ### Tile Sizes
 - TILE_Q = 32 (queries per tile)
 - TILE_K = 32 (keys per tile)
-- Head dim D = up to 128 (fits in registers/shared memory)
+- Head dim D = up to 64 (the enforced shader limit)
 - Workgroup size: (TILE_Q, 1, 1) = 32 threads
 
 ### Shared Memory Layout

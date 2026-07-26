@@ -11,6 +11,9 @@ pub enum VkcError {
     #[error("No compute queue family found")]
     NoComputeQueue,
 
+    #[error("No compute device supports Vulkan 1.2")]
+    UnsupportedVulkanVersion,
+
     #[error("Allocation failed: {0}")]
     Allocation(String),
 

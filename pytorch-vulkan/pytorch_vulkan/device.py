@@ -1,155 +1,240 @@
-"""Vulkan device helpers wrapping the Rust/C++ extension."""
+"""Vulkan device lifecycle, capabilities, and packaged shader loading."""
+
+from __future__ import annotations
+
+import contextlib
+import logging
+import sys
+import threading
+import types
+from importlib import resources
+from typing import Iterator
 
 import torch
+
+from pytorch_vulkan.operator_registry import (
+    native_shaders,
+    shader_binding_count,
+    ShaderVariant,
+)
+
+
+log = logging.getLogger(__name__)
+_initialized = False
+_torch_registered = False
+_owned_shader_handles: set[int] = set()
+_lifecycle_lock = threading.RLock()
 
 
 def _ext():
     try:
         from pytorch_vulkan import _C
+
         return _C
     except ImportError:
         return None
 
 
-_initialized = False
+def _register_torch_backend(ext) -> None:
+    global _torch_registered
+    if _torch_registered:
+        return
+    current_name = torch._C._get_privateuse1_backend_name()
+    if current_name == "privateuseone":
+        torch.utils.rename_privateuse1_backend("vkgpu")
+    elif current_name != "vkgpu":
+        raise RuntimeError(f"PrivateUse1 is already registered as {current_name!r}")
+
+    vkgpu_mod = types.ModuleType("torch.vkgpu")
+    vkgpu_mod.is_available = lambda: ext.is_available()
+    vkgpu_mod.device_count = lambda: ext.device_count()
+    vkgpu_mod.current_device = lambda: 0
+    vkgpu_mod.set_device = lambda device=None: None
+    vkgpu_mod._is_in_bad_fork = lambda: False
+    vkgpu_mod.manual_seed_all = lambda seed: None
+    vkgpu_mod.synchronize = lambda device=None: ext.flush()
+    sys.modules["torch.vkgpu"] = vkgpu_mod
+    setattr(torch, "vkgpu", vkgpu_mod)
+    torch.utils.generate_methods_for_privateuse1_backend("vkgpu")
+    _torch_registered = True
+
+
+def _shader_bytes(shader_file: str) -> bytes:
+    shader = resources.files("pytorch_vulkan").joinpath(
+        "_shaders", f"{shader_file}.spv"
+    )
+    if not shader.is_file():
+        raise RuntimeError(
+            f"packaged SPIR-V shader is missing: {shader_file}.spv; "
+            "rebuild pytorch-vulkan to compile its shaders"
+        )
+    return shader.read_bytes()
+
+
+def load_shader(
+    shader: ShaderVariant | str,
+    capabilities: dict[str, bool] | None = None,
+) -> int | None:
+    with _lifecycle_lock:
+        ext = _ext()
+        if ext is None:
+            return None
+        if isinstance(shader, ShaderVariant):
+            variant = shader
+        else:
+            required = set()
+            if "_f16" in shader:
+                required.update({"shader_float16", "storage_buffer16_bit_access"})
+            if "coopmat" in shader:
+                required.add("cooperative_matrix_nv")
+            if "attn_bwd" in shader:
+                required.add("shader_buffer_float32_atomic_add")
+            variant = ShaderVariant(shader, frozenset(required))
+        if capabilities is None:
+            capabilities = device_info()["capabilities"]
+        if any(not capabilities.get(name, False) for name in variant.capabilities):
+            return None
+        handle = int(
+            ext.load_shader(
+                _shader_bytes(variant.file),
+                shader_binding_count(variant),
+            )
+        )
+        if handle == 0:
+            return None
+        _owned_shader_handles.add(handle)
+        return handle
+
+
+def shader_is_live(handle: int | None) -> bool:
+    with _lifecycle_lock:
+        return handle is not None and handle in _owned_shader_handles
+
+
+def _record_cpu_fallback(op_name: str) -> None:
+    ext = _ext()
+    if ext is not None and ext.is_available():
+        ext.record_fallback(op_name)
+
 
 def init() -> bool:
     global _initialized
-    if _initialized:
-        return True
-    ext = _ext()
-    if ext is None:
-        return False
-    result = ext.init()
-    if result:
-        import sys
-        import types
-        # Use 'vkgpu' to avoid conflict with PyTorch's built-in vulkan backend
-        torch.utils.rename_privateuse1_backend("vkgpu")
-        vkgpu_mod = types.ModuleType("torch.vkgpu")
-        vkgpu_mod.is_available = lambda: ext.is_available()
-        vkgpu_mod.device_count = lambda: ext.device_count()
-        sys.modules["torch.vkgpu"] = vkgpu_mod
-        setattr(torch, "vkgpu", vkgpu_mod)
-        torch.utils.generate_methods_for_privateuse1_backend("vkgpu")
-        # Pre-compile core shaders and register handles with C++ for native dispatch.
-        _register_native_shaders(ext)
-        _initialized = True
-    return result
-
-
-def _register_native_shaders(ext):
-    """Pre-compile GLSL shaders and register pipeline handles with C++.
-
-    This enables native C++ dispatch for core ops (add, mul, etc.)
-    bypassing Python/torch.compile entirely.
-    """
-    from pytorch_vulkan.inductor_backend import compile_glsl_to_spirv, SHADER_DIR
-    import logging
-    log = logging.getLogger(__name__)
-
-    # Map of op_name -> (shader_file, push_constant_format)
-    native_ops = {
-        # FP32 ops
-        "add": "add.comp",
-        "mul": "mul.comp",
-        "sub": "sub.comp",
-        "relu": "relu.comp",
-        "neg": "neg.comp",
-        "sigmoid": "sigmoid.comp",
-        "tanh": "tanh.comp",
-        "exp": "exp.comp",
-        "log": "log.comp",
-        "gelu": "gelu.comp",
-        "layer_norm": "layer_norm.comp",
-        "rmsnorm": "rmsnorm.comp",
-        "rope": "rope.comp",
-        "matmul_tiled": "matmul_tiled.comp",
-        "bmm": "bmm.comp",
-        "softmax": "softmax.comp",
-        "softmax_backward": "softmax_backward.comp",
-        "silu": "silu.comp",
-        "sqrt": "sqrt.comp",
-        "abs": "abs.comp",
-        "rsqrt": "rsqrt.comp",
-        "embedding": "embedding.comp",
-        "embedding_f16": "embedding_f16.comp",
-        "div": "div.comp",
-        "threshold_backward": "threshold_backward.comp",
-        "pow": "pow.comp",
-        "cat2": "cat2.comp",
-        "copy": "copy.comp",
-        "addcdiv": "addcdiv.comp",
-        # FP16 variants
-        "add_f16": "add_f16.comp",
-        "add_bf16": "add_bf16.comp",
-        "copy_bf16": "copy_bf16.comp",
-        "mul_bf16": "mul_bf16.comp",
-        "sub_bf16": "sub_bf16.comp",
-        "div_bf16": "div_bf16.comp",
-        "silu_bf16": "silu_bf16.comp",
-        "softmax_bf16": "softmax_bf16.comp",
-        "mul_f16": "mul_f16.comp",
-        "sub_f16": "sub_f16.comp",
-        "softmax_f16": "softmax_f16.comp",
-        "relu_f16": "relu_f16.comp",
-        "neg_f16": "neg_f16.comp",
-        "sigmoid_f16": "sigmoid_f16.comp",
-        "tanh_f16": "tanh_f16.comp",
-        "exp_f16": "exp_f16.comp",
-        "log_f16": "log_f16.comp",
-        "silu_f16": "silu_f16.comp",
-        "cat2_f16": "cat2_f16.comp",
-        # Cooperative matrix (Tensor Core) - requires f16 inputs
-        "bmm_coopmat": "bmm_coopmat.comp",
-        "gelu_f16": "gelu_f16.comp",
-        "layer_norm_f16": "layer_norm_f16.comp",
-        "rmsnorm_f16": "rmsnorm_f16.comp",
-        "rope_f16": "rope_f16.comp",
-        "matmul_tiled_f16": "matmul_tiled_f16.comp",
-        "copy_f16": "copy_f16.comp",
-        "copy_f16_to_f32": "copy_f16_to_f32.comp",
-        "copy_f32_to_f16": "copy_f32_to_f16.comp",
-        "addcdiv_f16": "addcdiv_f16.comp",
-        "addcmul": "addcmul.comp",
-        "addcmul_f16": "addcmul_f16.comp",
-        "lerp": "lerp.comp",
-        "lerp_f16": "lerp_f16.comp",
-        "lerp_tensor": "lerp_tensor.comp",
-        "lerp_tensor_f16": "lerp_tensor_f16.comp",
-        }
-    if not hasattr(ext, "register_shader_handle"):
-        log.debug("C++ extension does not support register_shader_handle yet")
-        return
-
-    for op_name, shader_file in native_ops.items():
-        path = SHADER_DIR / shader_file
-        if not path.exists():
-            continue
+    with _lifecycle_lock:
+        if _initialized:
+            return True
+        ext = _ext()
+        if ext is None or not ext.init():
+            return False
+        _register_torch_backend(ext)
+        capabilities = dict(ext.device_info()["capabilities"])
         try:
-            spirv = compile_glsl_to_spirv(path.read_text())
-            handle = ext.load_shader(spirv)
-            if handle != 0:
-                ext.register_shader_handle(op_name, handle)
-                log.debug("Registered native shader: %s (handle=%d)", op_name, handle)
-        except Exception as e:
-            log.warning("Failed to register native shader %s: %s", op_name, e)
+            for op_name, variant in native_shaders(capabilities):
+                handle = load_shader(variant, capabilities)
+                if handle is not None:
+                    ext.register_shader_handle(op_name, handle)
+                    log.debug(
+                        "registered Vulkan shader %s as %d",
+                        op_name,
+                        handle,
+                    )
+        except Exception:
+            shutdown()
+            raise
+        _initialized = True
+        return True
+
+
+def shutdown() -> bool:
+    global _initialized
+    with _lifecycle_lock:
+        ext = _ext()
+        if ext is None or not ext.is_available():
+            _initialized = False
+            return True
+        stats = dict(ext.memory_stats())
+        if stats["active_allocations"]:
+            log.error(
+                "cannot shut down Vulkan with %d live tensor allocations",
+                stats["active_allocations"],
+            )
+            return False
+        for handle in tuple(_owned_shader_handles):
+            if not ext.destroy_shader(handle):
+                return False
+            _owned_shader_handles.remove(handle)
+        ext.clear_shader_handles()
+        if not ext.shutdown():
+            return False
+        _initialized = False
+        return True
 
 
 def is_available() -> bool:
-    ext = _ext()
-    if ext is None:
-        return False
-    if not ext.is_available():
-        ext.init()
-    return ext.is_available()
+    return init()
 
 
 def device_count() -> int:
     ext = _ext()
-    return ext.device_count() if ext else 0
+    return ext.device_count() if ext is not None and init() else 0
 
 
 def device_name() -> str:
     ext = _ext()
-    return ext.device_name() if ext else "N/A"
+    return ext.device_name() if ext is not None and init() else "N/A"
+
+
+def device_info() -> dict:
+    ext = _ext()
+    if ext is None or not init():
+        return {}
+    return dict(ext.device_info())
+
+
+def memory_stats() -> dict:
+    ext = _ext()
+    if ext is None or not ext.is_available():
+        return {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "active_allocations": 0,
+            "cached_allocations": 0,
+            "active_pipelines": 0,
+            "total_dispatches": 0,
+            "pending_dispatches": 0,
+            "flush_generation": 0,
+            "auto_flush_threshold": 0,
+        }
+    return dict(ext.memory_stats())
+
+
+def empty_cache() -> None:
+    ext = _ext()
+    if ext is not None and ext.is_available():
+        ext.empty_cache()
+
+
+def reset_fallback_stats() -> None:
+    ext = _ext()
+    if ext is None or not init():
+        raise RuntimeError("Vulkan backend is unavailable")
+    ext.reset_fallback_stats()
+
+
+def fallback_stats() -> dict:
+    ext = _ext()
+    if ext is None or not init():
+        return {"count": 0, "operations": {}, "strict": False}
+    return dict(ext.fallback_stats())
+
+
+@contextlib.contextmanager
+def strict_fallbacks() -> Iterator[None]:
+    ext = _ext()
+    if ext is None or not init():
+        raise RuntimeError("Vulkan backend is unavailable")
+    previous = bool(ext.fallback_stats()["strict"])
+    ext.set_strict_fallback(True)
+    try:
+        yield
+    finally:
+        ext.set_strict_fallback(previous)

@@ -1,0 +1,61 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+#define TILE_SIZE 16
+
+layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE) in;
+
+layout(set = 0, binding = 0) readonly buffer InputA { float16_t A[]; };
+layout(set = 0, binding = 1) readonly buffer InputB { float16_t B[]; };
+layout(set = 0, binding = 2) writeonly buffer OutputC { float16_t C[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint batch;
+    uint rows;
+    uint columns;
+    uint inner;
+} pc;
+
+shared float a_tile[TILE_SIZE][TILE_SIZE];
+shared float b_tile[TILE_SIZE][TILE_SIZE];
+
+void main() {
+    uint batch_idx = gl_WorkGroupID.z;
+    uint row = gl_GlobalInvocationID.y;
+    uint column = gl_GlobalInvocationID.x;
+    uint local_column = gl_LocalInvocationID.x;
+    uint local_row = gl_LocalInvocationID.y;
+    float sum = 0.0;
+    uint tiles = (pc.inner + TILE_SIZE - 1) / TILE_SIZE;
+    uint a_offset = batch_idx * pc.rows * pc.inner;
+    uint b_offset = batch_idx * pc.inner * pc.columns;
+    uint output_offset = batch_idx * pc.rows * pc.columns;
+
+    for (uint tile = 0; tile < tiles; tile++) {
+        uint a_column = tile * TILE_SIZE + local_column;
+        uint b_row = tile * TILE_SIZE + local_row;
+        a_tile[local_row][local_column] =
+            row < pc.rows && a_column < pc.inner
+            ? float(A[a_offset + row * pc.inner + a_column])
+            : 0.0;
+        b_tile[local_row][local_column] =
+            b_row < pc.inner && column < pc.columns
+            ? float(B[b_offset + b_row * pc.columns + column])
+            : 0.0;
+        barrier();
+        for (uint inner_idx = 0; inner_idx < TILE_SIZE; inner_idx++) {
+            sum +=
+                a_tile[local_row][inner_idx] *
+                b_tile[inner_idx][local_column];
+        }
+        barrier();
+    }
+
+    if (
+        batch_idx < pc.batch &&
+        row < pc.rows &&
+        column < pc.columns
+    ) {
+        C[output_offset + row * pc.columns + column] = float16_t(sum);
+    }
+}

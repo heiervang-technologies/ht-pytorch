@@ -7,6 +7,7 @@ import torch
 def requires_vulkan(fn):
     try:
         from pytorch_vulkan import init, is_available
+
         init()
         available = is_available()
     except ImportError:
@@ -53,6 +54,7 @@ class TestFP16Lifecycle:
 def _flush():
     try:
         from pytorch_vulkan import _C
+
         _C.flush()
     except Exception:
         pass
@@ -144,8 +146,9 @@ class TestFP16UnaryOps:
 
     @requires_vulkan
     def test_log_f16(self):
-        x = (torch.rand(128, dtype=torch.float16) + 0.01)
+        x = torch.rand(128, dtype=torch.float16) + 0.01
         assert_close(torch.log(vk(x)), torch.log(x), atol=0.01)
+
 
 class TestFP16Matmul:
     @requires_vulkan
@@ -176,7 +179,9 @@ class TestFP16Matmul:
         assert_close(result, expected, atol=0.5)
 
     @requires_vulkan
-    @pytest.mark.skip(reason="dtype casting between f16 and f32 on Vulkan needs _to_copy dtype support")
+    @pytest.mark.skip(
+        reason="dtype casting between f16 and f32 on Vulkan needs _to_copy dtype support"
+    )
     def test_f16_to_f32_compute(self):
         """Test that f16 tensors can be upcasted and computed in f32."""
         x = torch.randn(32, dtype=torch.float16, device="vkgpu:0")

@@ -4,6 +4,7 @@ Run with: python benchmarks/bench_ops.py
 """
 
 import time
+
 import torch
 import torch.nn.functional as F
 
@@ -55,19 +56,23 @@ def bench_sdpa(device, B=4, H=8, S=64, D=64):
     v = torch.randn(B, H, S, D, device=device)
     if device == "vkgpu:0":
         from pytorch_vulkan import vulkan_sdpa
-        return bench(f"sdpa(B={B},H={H},S={S},D={D}) [{device}]",
-                     lambda: vulkan_sdpa(q, k, v))
+
+        return bench(
+            f"sdpa(B={B},H={H},S={S},D={D}) [{device}]", lambda: vulkan_sdpa(q, k, v)
+        )
     else:
-        return bench(f"sdpa(B={B},H={H},S={S},D={D}) [{device}]",
-                     lambda: F.scaled_dot_product_attention(q, k, v))
+        return bench(
+            f"sdpa(B={B},H={H},S={S},D={D}) [{device}]",
+            lambda: F.scaled_dot_product_attention(q, k, v),
+        )
 
 
 def bench_transformer_step(device, d_model=128, nhead=4, seq_len=32, batch=8):
     import torch.nn as nn
 
     model = nn.TransformerEncoderLayer(
-        d_model=d_model, nhead=nhead, dim_feedforward=256,
-        dropout=0.0, batch_first=True).to(device)
+        d_model=d_model, nhead=nhead, dim_feedforward=256, dropout=0.0, batch_first=True
+    ).to(device)
     x = torch.randn(batch, seq_len, d_model, device=device)
 
     def step():
@@ -79,6 +84,7 @@ def bench_transformer_step(device, d_model=128, nhead=4, seq_len=32, batch=8):
 
 def main():
     from pytorch_vulkan import init
+
     init()
 
     devices = ["cpu"]

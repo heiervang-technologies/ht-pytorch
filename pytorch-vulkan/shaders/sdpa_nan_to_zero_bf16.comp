@@ -1,0 +1,35 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Values {
+    uint values[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+} pc;
+
+bool is_bf16_nan(uint value) {
+    return (value & 0x7f80u) == 0x7f80u &&
+        (value & 0x007fu) != 0;
+}
+
+void main() {
+    uint word_index = gl_GlobalInvocationID.x;
+    uint first = word_index * 2;
+    if (first >= pc.num_elements) {
+        return;
+    }
+
+    uint packed = values[word_index];
+    uint low = packed & 0xffffu;
+    uint high = packed >> 16;
+    if (is_bf16_nan(low)) {
+        low = 0;
+    }
+    if (first + 1 < pc.num_elements && is_bf16_nan(high)) {
+        high = 0;
+    }
+    values[word_index] = low | (high << 16);
+}

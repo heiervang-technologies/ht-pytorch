@@ -7,6 +7,7 @@ import torch
 def requires_vulkan(fn):
     try:
         from pytorch_vulkan import init, is_available
+
         init()
         available = is_available()
     except ImportError:
@@ -23,6 +24,7 @@ def vk(t):
 def test_addmm_correctness(M, K, N):
     """Test addmm(bias, input, weight) matches CPU."""
     from pytorch_vulkan import _C
+
     _C.flush()
 
     bias = torch.randn(N)
@@ -40,6 +42,7 @@ def test_addmm_correctness(M, K, N):
 def test_addmm_via_linear():
     """Test that nn.Linear (which uses addmm internally) works on Vulkan."""
     from pytorch_vulkan import _C
+
     _C.flush()
 
     linear = torch.nn.Linear(32, 16)
@@ -61,6 +64,7 @@ def test_addmm_via_linear():
 def test_addmm_alpha_beta():
     """Test addmm with non-default alpha and beta."""
     from pytorch_vulkan import _C
+
     _C.flush()
 
     bias = torch.randn(8)
