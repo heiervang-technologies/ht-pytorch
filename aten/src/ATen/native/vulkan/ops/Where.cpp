@@ -1,5 +1,7 @@
 #ifdef USE_VULKAN_API
 
+#include <ATen/ExpandUtils.h>
+#include <ATen/native/TypeProperties.h>
 #include <ATen/native/vulkan/ops/Common.h>
 #include <ATen/native/vulkan/ops/Utils.h>
 #include <torch/library.h>
@@ -16,19 +18,47 @@ Tensor where_self(
     const Tensor& condition_arg,
     const Tensor& self_arg,
     const Tensor& other_arg) {
+  TORCH_CHECK(
+      condition_arg.scalar_type() == at::kBool,
+      "where expected condition to be a boolean tensor, but got ",
+      condition_arg.scalar_type());
+  TORCH_CHECK(
+      condition_arg.dim() <= 4 && self_arg.dim() <= 4 &&
+          other_arg.dim() <= 4,
+      "Vulkan where supports tensors up to 4 dimensions");
+
   api::Context* const context = api::context();
 
-  // Convert bool condition to float on CPU, then transfer to Vulkan
-  Tensor cond_float;
-  if (condition_arg.scalar_type() == at::kBool) {
-    Tensor cond_cpu = condition_arg.is_vulkan() ? condition_arg.cpu() : condition_arg;
-    cond_float = cond_cpu.to(at::kFloat).vulkan();
-  } else {
-    cond_float = condition_arg.is_vulkan() ? condition_arg : condition_arg.vulkan();
+  auto out_sizes =
+      at::infer_size_dimvector(self_arg.sizes(), other_arg.sizes());
+  out_sizes = at::infer_size_dimvector(out_sizes, condition_arg.sizes());
+
+  const ScalarType result_dtype =
+      at::native::result_type(self_arg, other_arg);
+  Tensor condition_cpu =
+      condition_arg.is_vulkan() ? condition_arg.cpu() : condition_arg;
+  if (condition_cpu.dim() == 0) {
+    condition_cpu = condition_cpu.reshape({1});
   }
-  const Tensor condition = cond_float;
-  const Tensor self = self_arg.is_vulkan() ? self_arg : self_arg.vulkan();
-  const Tensor other = other_arg.is_vulkan() ? other_arg : other_arg.vulkan();
+  const Tensor condition = condition_cpu.to(at::kFloat).vulkan();
+
+  Tensor self_typed =
+      self_arg.scalar_type() == result_dtype ? self_arg
+                                             : self_arg.to(result_dtype);
+  if (self_typed.dim() == 0) {
+    self_typed = self_typed.reshape({1});
+  }
+  const Tensor self =
+      self_typed.is_vulkan() ? self_typed : self_typed.vulkan();
+
+  Tensor other_typed =
+      other_arg.scalar_type() == result_dtype ? other_arg
+                                              : other_arg.to(result_dtype);
+  if (other_typed.dim() == 0) {
+    other_typed = other_typed.reshape({1});
+  }
+  const Tensor other =
+      other_typed.is_vulkan() ? other_typed : other_typed.vulkan();
 
   const vTensor& v_condition = convert(condition);
   const vTensor& v_self = convert(self);
@@ -36,16 +66,40 @@ Tensor where_self(
 
   vTensor v_output{
       context,
-      v_self.sizes(),
+      out_sizes,
       v_self.dtype(),
   };
 
   const struct Block final {
-    uvec3 extents;
-    int32_t fill0;
+    ivec4 output_sizes;
+    ivec4 condition_sizes;
+    ivec4 self_sizes;
+    ivec4 other_sizes;
   } block{
-      v_output.extents(),
-      0,
+      {
+          safe_downcast<int32_t>(get_dim<Dim4D::Width>(v_output)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Height>(v_output)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Channel>(v_output)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Batch>(v_output)),
+      },
+      {
+          safe_downcast<int32_t>(get_dim<Dim4D::Width>(v_condition)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Height>(v_condition)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Channel>(v_condition)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Batch>(v_condition)),
+      },
+      {
+          safe_downcast<int32_t>(get_dim<Dim4D::Width>(v_self)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Height>(v_self)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Channel>(v_self)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Batch>(v_self)),
+      },
+      {
+          safe_downcast<int32_t>(get_dim<Dim4D::Width>(v_other)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Height>(v_other)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Channel>(v_other)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Batch>(v_other)),
+      },
   };
 
   api::UniformParamsBuffer params(context, block);

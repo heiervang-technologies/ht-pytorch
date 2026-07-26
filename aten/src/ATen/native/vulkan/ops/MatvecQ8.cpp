@@ -99,6 +99,9 @@ Tensor run_q8_linear(
     const Tensor& bias_arg,
     const Tensor& scale_arg,
     int64_t zero_point) {
+  TORCH_CHECK(
+      input_arg.numel() == input_arg.size(-1),
+      "Vulkan Q8 linear currently supports exactly one input row");
   api::Context* const context = api::context();
 
   // Reshape to 2D for matmul
@@ -268,6 +271,9 @@ Tensor run_q8g_linear(
     const Tensor& bias_arg,
     const Tensor& scale_arg,
     int64_t group_size_k4) {
+  TORCH_CHECK(
+      input_arg.numel() == input_arg.size(-1),
+      "Vulkan grouped Q8 linear currently supports exactly one input row");
   api::Context* const context = api::context();
 
   Tensor input_2d = input_arg;
@@ -365,7 +371,9 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> create_q4g_linear(
   const int64_t K = weight.size(0);
   const int64_t N = weight.size(1);
   TORCH_CHECK(K % 8 == 0, "K must be divisible by 8 for int4 packing");
-  TORCH_CHECK(group_size % 4 == 0, "group_size must be divisible by 4");
+  TORCH_CHECK(
+      group_size % 8 == 0,
+      "group_size must be divisible by 8 for int4 packing");
   TORCH_CHECK(K % group_size == 0, "K must be divisible by group_size");
 
   const float* w_ptr = weight.const_data_ptr<float>();
@@ -448,6 +456,9 @@ Tensor run_q4g_linear(
     const Tensor& bias_arg,
     const Tensor& scale_arg,
     int64_t group_size_k4) {
+  TORCH_CHECK(
+      input_arg.numel() == input_arg.size(-1),
+      "Vulkan grouped Q4 linear currently supports exactly one input row");
   api::Context* const context = api::context();
 
   Tensor input_2d = input_arg;

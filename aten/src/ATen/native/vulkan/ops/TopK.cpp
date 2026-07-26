@@ -89,10 +89,11 @@ std::tuple<Tensor, Tensor> topk(
       v_self.image(pipeline_barrier, api::PipelineStage::COMPUTE),
       params.buffer());
 
-  // Indices are stored as float in the shader; convert to int64 on CPU
+  // Vulkan has no int64 scalar type, so return the required Long indices on
+  // CPU instead of attempting an unsupported Long upload.
   Tensor values_out = convert(v_values);
   Tensor indices_float = convert(v_indices);
-  Tensor indices_out = indices_float.cpu().to(at::kLong).vulkan();
+  Tensor indices_out = indices_float.cpu().to(at::kLong);
 
   return std::make_tuple(values_out, indices_out);
 }

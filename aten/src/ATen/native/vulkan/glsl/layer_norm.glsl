@@ -4,7 +4,7 @@
 
 // Fused Layer Normalization: y = (x - mean) / sqrt(var + eps) * weight + bias
 // One workgroup per row. Two-pass reduction via shared memory.
-// Channels-packed layout: width=D, height=S, depth=ceil(B/4), .x per texel.
+// Channels-packed layout: width=D, height=S, depth=ceil(B/4).
 
 layout(std430) buffer;
 
@@ -22,7 +22,7 @@ uBlock;
 
 layout(local_size_x = WG_SIZE, local_size_y = 1, local_size_z = 1) in;
 
-shared float partial[WG_SIZE];
+shared vec4 partial[WG_SIZE];
 
 void main() {
   const uint tid = gl_LocalInvocationID.x;
@@ -31,9 +31,9 @@ void main() {
   const int D = uBlock.extents.x;
 
   // Pass 1: compute mean
-  float sum_val = 0.0;
+  vec4 sum_val = vec4(0.0);
   for (int w = int(tid); w < D; w += WG_SIZE) {
-    sum_val += texelFetch(uInput, ivec3(w, y, z), 0).x;
+    sum_val += texelFetch(uInput, ivec3(w, y, z), 0);
   }
   partial[tid] = sum_val;
   barrier();
@@ -45,12 +45,12 @@ void main() {
     barrier();
   }
 
-  float mean = partial[0] / float(D);
+  vec4 mean = partial[0] / float(D);
 
   // Pass 2: compute variance
-  float sum_sq = 0.0;
+  vec4 sum_sq = vec4(0.0);
   for (int w = int(tid); w < D; w += WG_SIZE) {
-    float diff = texelFetch(uInput, ivec3(w, y, z), 0).x - mean;
+    vec4 diff = texelFetch(uInput, ivec3(w, y, z), 0) - mean;
     sum_sq += diff * diff;
   }
   partial[tid] = sum_sq;
@@ -63,14 +63,14 @@ void main() {
     barrier();
   }
 
-  float inv_std = inversesqrt(partial[0] / float(D) + 1e-5);
+  vec4 inv_std = inversesqrt(partial[0] / float(D) + vec4(1e-5));
 
   // Pass 3: normalize, scale, shift
   for (int w = int(tid); w < D; w += WG_SIZE) {
-    float val = texelFetch(uInput, ivec3(w, y, z), 0).x;
+    vec4 val = texelFetch(uInput, ivec3(w, y, z), 0);
     float wt = texelFetch(uWeight, ivec3(w, 0, 0), 0).x;
     float bi = texelFetch(uBias, ivec3(w, 0, 0), 0).x;
-    float normed = (val - mean) * inv_std * wt + bi;
-    imageStore(uOutput, ivec3(w, y, z), vec4(normed, 0.0, 0.0, 0.0));
+    vec4 normed = (val - mean) * inv_std * wt + vec4(bi);
+    imageStore(uOutput, ivec3(w, y, z), normed);
   }
 }

@@ -6,7 +6,7 @@
 // One workgroup per row. Reduction via shared memory.
 // Operates on channels-packed tensors (default Vulkan layout).
 // For 3D (B, S, D) with B small: width=D, height=S, depth=ceil(B/4)
-// Each texel's .x holds one scalar value (when B <= 4).
+// Each texel lane holds an independent row.
 
 layout(std430) buffer;
 
@@ -24,7 +24,7 @@ uBlock;
 
 layout(local_size_x = WG_SIZE, local_size_y = 1, local_size_z = 1) in;
 
-shared float partial_sums[WG_SIZE];
+shared vec4 partial_sums[WG_SIZE];
 
 void main() {
   const uint tid = gl_LocalInvocationID.x;
@@ -33,9 +33,9 @@ void main() {
   const int D = uBlock.extents.x;
 
   // Phase 1: compute partial sum of squares over the width dimension
-  float sum_sq = 0.0;
+  vec4 sum_sq = vec4(0.0);
   for (int w = int(tid); w < D; w += WG_SIZE) {
-    float val = texelFetch(uInput, ivec3(w, y, z), 0).x;
+    vec4 val = texelFetch(uInput, ivec3(w, y, z), 0);
     sum_sq += val * val;
   }
   partial_sums[tid] = sum_sq;
@@ -50,11 +50,11 @@ void main() {
   }
 
   // Phase 2: normalize and apply weight
-  float rms_inv = inversesqrt(partial_sums[0] / float(D) + 1e-5);
+  vec4 rms_inv = inversesqrt(partial_sums[0] / float(D) + vec4(1e-5));
 
   for (int w = int(tid); w < D; w += WG_SIZE) {
-    float val = texelFetch(uInput, ivec3(w, y, z), 0).x;
+    vec4 val = texelFetch(uInput, ivec3(w, y, z), 0);
     float wt = texelFetch(uWeight, ivec3(w, 0, 0), 0).x;
-    imageStore(uOutput, ivec3(w, y, z), vec4(val * rms_inv * wt, 0.0, 0.0, 0.0));
+    imageStore(uOutput, ivec3(w, y, z), val * rms_inv * wt);
   }
 }

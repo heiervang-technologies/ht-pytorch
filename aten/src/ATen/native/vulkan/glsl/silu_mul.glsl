@@ -26,9 +26,10 @@ void main() {
   }
 
   const int half_w = uBlock.extents.x;
-  float gate = texelFetch(uInput, pos, 0).x;
-  float up = texelFetch(uInput, ivec3(pos.x + half_w, pos.y, pos.z), 0).x;
+  vec4 gate = texelFetch(uInput, pos, 0);
+  vec4 up =
+      texelFetch(uInput, ivec3(pos.x + half_w, pos.y, pos.z), 0);
 
-  float silu_gate = gate / (1.0 + exp(-gate));
-  imageStore(uOutput, pos, vec4(silu_gate * up, 0.0, 0.0, 0.0));
+  vec4 silu_gate = gate / (vec4(1.0) + exp(-gate));
+  imageStore(uOutput, pos, silu_gate * up);
 }

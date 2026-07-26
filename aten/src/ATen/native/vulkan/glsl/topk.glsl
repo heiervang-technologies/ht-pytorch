@@ -35,52 +35,54 @@ void main() {
 
     // Collect values along the x dimension for this (y, z)
     // Use a simple selection: find the out_x-th largest/smallest
-    float selected_val;
-    int selected_idx;
-    float prev_val = uBlock.largest != 0 ? 1.0/0.0 : -1.0/0.0;
-    int prev_idx = -1;
+    vec4 selected_values;
+    vec4 selected_indices;
+    for (int lane = 0; lane < 4; lane++) {
+      float selected_val = 0.0;
+      int selected_idx = 0;
+      float prev_val = uBlock.largest != 0 ? 1.0/0.0 : -1.0/0.0;
+      int prev_idx = -1;
 
-    // For the first element (out_x == 0), find the global max/min
-    // For subsequent elements, find the next max/min that's <= prev selection
-    for (int rank = 0; rank <= out_x; rank++) {
-      float best_val = uBlock.largest != 0 ? -1.0/0.0 : 1.0/0.0;
-      int best_idx = 0;
+      // For the first element (out_x == 0), find the global max/min.
+      // Subsequent elements find the next value beyond the prior selection.
+      for (int rank = 0; rank <= out_x; rank++) {
+        float best_val =
+            uBlock.largest != 0 ? -1.0/0.0 : 1.0/0.0;
+        int best_idx = 0;
 
-      for (int i = 0; i < uBlock.dim_size; i++) {
-        ivec3 read_pos = ivec3(i, pos.y, pos.z);
-        float val = texelFetch(uInput, read_pos, 0).x;
+        for (int i = 0; i < uBlock.dim_size; i++) {
+          ivec3 read_pos = ivec3(i, pos.y, pos.z);
+          float val = texelFetch(uInput, read_pos, 0)[lane];
 
-        bool is_better;
-        if (uBlock.largest != 0) {
-          is_better = val > best_val;
-        } else {
-          is_better = val < best_val;
-        }
-
-        // Skip values we've already selected (by checking against threshold)
-        bool is_valid;
-        if (rank == 0) {
-          is_valid = true;
-        } else {
-          if (uBlock.largest != 0) {
-            is_valid = (val < prev_val) || (val == prev_val && i > prev_idx);
+          bool is_better = uBlock.largest != 0
+              ? val > best_val
+              : val < best_val;
+          bool is_valid;
+          if (rank == 0) {
+            is_valid = true;
+          } else if (uBlock.largest != 0) {
+            is_valid =
+                (val < prev_val) || (val == prev_val && i > prev_idx);
           } else {
-            is_valid = (val > prev_val) || (val == prev_val && i > prev_idx);
+            is_valid =
+                (val > prev_val) || (val == prev_val && i > prev_idx);
+          }
+
+          if (is_better && is_valid) {
+            best_val = val;
+            best_idx = i;
           }
         }
-
-        if (is_better && is_valid) {
-          best_val = val;
-          best_idx = i;
-        }
+        selected_val = best_val;
+        selected_idx = best_idx;
+        prev_val = best_val;
+        prev_idx = best_idx;
       }
-      selected_val = best_val;
-      selected_idx = best_idx;
-      prev_val = best_val;
-      prev_idx = best_idx;
+      selected_values[lane] = selected_val;
+      selected_indices[lane] = float(selected_idx);
     }
 
-    imageStore(uValues, pos, vec4(selected_val, 0.0, 0.0, 0.0));
-    imageStore(uIndices, pos, vec4(float(selected_idx), 0.0, 0.0, 0.0));
+    imageStore(uValues, pos, selected_values);
+    imageStore(uIndices, pos, selected_indices);
   }
 }

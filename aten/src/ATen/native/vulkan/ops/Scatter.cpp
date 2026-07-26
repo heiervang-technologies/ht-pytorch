@@ -20,16 +20,18 @@ Tensor scatter_src(
   TORCH_CHECK(
       self_arg.dim() >= 1 && self_arg.dim() <= 4,
       "Vulkan scatter: input must be 1-4D, got ", self_arg.dim(), "D");
+  TORCH_CHECK(
+      index_arg.scalar_type() == at::kLong,
+      "Vulkan scatter: index must have dtype int64");
 
   api::Context* const context = api::context();
 
   const Tensor self = self_arg.is_vulkan() ? self_arg : self_arg.vulkan();
-  const Tensor index = index_arg.is_vulkan() ? index_arg : index_arg.vulkan();
   const Tensor src = src_arg.is_vulkan() ? src_arg : src_arg.vulkan();
 
   const vTensor& v_self = convert(self);
-  const vTensor& v_index = convert(index);
   const vTensor& v_src = convert(src);
+  const Tensor index_cpu = index_arg.cpu().to(at::kInt).contiguous();
 
   vTensor v_output{
       context,
@@ -40,27 +42,24 @@ Tensor scatter_src(
   const int64_t ndim = self_arg.dim();
   const int64_t norm_dim = utils::normalize(dim, ndim);
 
-  int vk_dim;
-  if (ndim <= 2) {
-    vk_dim = (norm_dim == ndim - 1) ? 0 : 1;
-  } else {
-    if (norm_dim == ndim - 1) {
-      vk_dim = 0;
-    } else if (norm_dim == ndim - 2) {
-      vk_dim = 1;
-    } else {
-      vk_dim = 2;
-    }
+  api::StorageBuffer index_buffer(context, api::kInt, index_cpu.numel());
+  {
+    api::MemoryMap mapping(
+        index_buffer.buffer(), api::MemoryAccessType::WRITE);
+    memcpy(
+        mapping.template data<int32_t>(),
+        index_cpu.const_data_ptr<int32_t>(),
+        index_cpu.nbytes());
   }
 
   int64_t src_dim_size = index_arg.size(norm_dim);
 
   const struct Block final {
     ivec4 out_extents;
+    ivec4 self_sizes;
+    ivec4 index_sizes;
     int32_t dim;
     int32_t src_dim_size;
-    int32_t fill0;
-    int32_t fill1;
   } block{
       {
           safe_downcast<int32_t>(v_output.extents().data[0u]),
@@ -68,10 +67,20 @@ Tensor scatter_src(
           safe_downcast<int32_t>(v_output.extents().data[2u]),
           0,
       },
-      vk_dim,
+      {
+          safe_downcast<int32_t>(get_dim<Dim4D::Width>(v_self)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Height>(v_self)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Channel>(v_self)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Batch>(v_self)),
+      },
+      {
+          safe_downcast<int32_t>(get_dim<Dim4D::Width>(index_arg)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Height>(index_arg)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Channel>(index_arg)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Batch>(index_arg)),
+      },
+      safe_downcast<int32_t>(norm_dim + 4 - ndim),
       safe_downcast<int32_t>(src_dim_size),
-      0,
-      0,
   };
 
   api::UniformParamsBuffer params(context, block);
@@ -88,7 +97,7 @@ Tensor scatter_src(
           api::PipelineStage::COMPUTE,
           api::MemoryAccessType::WRITE),
       v_self.image(pipeline_barrier, api::PipelineStage::COMPUTE),
-      v_index.image(pipeline_barrier, api::PipelineStage::COMPUTE),
+      index_buffer.buffer(),
       v_src.image(pipeline_barrier, api::PipelineStage::COMPUTE),
       params.buffer());
 
