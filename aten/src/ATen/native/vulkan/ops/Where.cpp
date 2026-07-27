@@ -23,8 +23,7 @@ Tensor where_self(
       "where expected condition to be a boolean tensor, but got ",
       condition_arg.scalar_type());
   TORCH_CHECK(
-      condition_arg.dim() <= 4 && self_arg.dim() <= 4 &&
-          other_arg.dim() <= 4,
+      condition_arg.dim() <= 4 && self_arg.dim() <= 4 && other_arg.dim() <= 4,
       "Vulkan where supports tensors up to 4 dimensions");
 
   api::Context* const context = api::context();
@@ -33,8 +32,7 @@ Tensor where_self(
       at::infer_size_dimvector(self_arg.sizes(), other_arg.sizes());
   out_sizes = at::infer_size_dimvector(out_sizes, condition_arg.sizes());
 
-  const ScalarType result_dtype =
-      at::native::result_type(self_arg, other_arg);
+  const ScalarType result_dtype = at::native::result_type(self_arg, other_arg);
   Tensor condition_cpu =
       condition_arg.is_vulkan() ? condition_arg.cpu() : condition_arg;
   if (condition_cpu.dim() == 0) {
@@ -42,18 +40,17 @@ Tensor where_self(
   }
   const Tensor condition = condition_cpu.to(at::kFloat).vulkan();
 
-  Tensor self_typed =
-      self_arg.scalar_type() == result_dtype ? self_arg
-                                             : self_arg.to(result_dtype);
+  Tensor self_typed = self_arg.scalar_type() == result_dtype
+      ? self_arg
+      : self_arg.to(result_dtype);
   if (self_typed.dim() == 0) {
     self_typed = self_typed.reshape({1});
   }
-  const Tensor self =
-      self_typed.is_vulkan() ? self_typed : self_typed.vulkan();
+  const Tensor self = self_typed.is_vulkan() ? self_typed : self_typed.vulkan();
 
-  Tensor other_typed =
-      other_arg.scalar_type() == result_dtype ? other_arg
-                                              : other_arg.to(result_dtype);
+  Tensor other_typed = other_arg.scalar_type() == result_dtype
+      ? other_arg
+      : other_arg.to(result_dtype);
   if (other_typed.dim() == 0) {
     other_typed = other_typed.reshape({1});
   }

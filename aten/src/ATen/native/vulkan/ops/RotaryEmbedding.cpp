@@ -14,6 +14,13 @@ Tensor rotary_embedding(
     const Tensor& input_arg,
     const Tensor& cos_arg,
     const Tensor& sin_arg) {
+  TORCH_CHECK(
+      input_arg.dim() >= 2,
+      "Vulkan rotary embedding: input must have at least two dimensions");
+  TORCH_CHECK(
+      input_arg.size(-1) % 2 == 0,
+      "Vulkan rotary embedding: final dimension must be even");
+
   api::Context* const context = api::context();
 
   const Tensor input = input_arg.is_vulkan() ? input_arg : input_arg.vulkan();

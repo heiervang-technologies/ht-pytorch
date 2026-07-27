@@ -16,6 +16,7 @@ layout(set = 0, binding = 4) uniform PRECISION restrict Block {
   // Sizes are W, H, C, N; dim is in padded NCHW order.
   ivec4 self_sizes;
   ivec4 index_sizes;
+  ivec4 src_sizes;
   int dim;
   int src_dim_size;
 }
@@ -56,7 +57,7 @@ void main() {
                 uBlock.index_sizes.x +
             source_logical.w;
         if (uIndices.data[linear_index] == target) {
-          const int source_c4 = (uBlock.index_sizes.z + 3) / 4;
+          const int source_c4 = (uBlock.src_sizes.z + 3) / 4;
           const ivec3 source_pos = ivec3(
               source_logical.w,
               source_logical.z,

@@ -12,6 +12,20 @@ namespace {
 
 using namespace api::utils;
 
+Tensor validate_indices(const Tensor& index_arg, const int64_t dim_size) {
+  const Tensor index_cpu = index_arg.cpu().contiguous();
+  const int64_t* const indices = index_cpu.const_data_ptr<int64_t>();
+  for (const auto i : c10::irange(index_cpu.numel())) {
+    TORCH_CHECK(
+        indices[i] >= 0 && indices[i] < dim_size,
+        "Vulkan scatter: index ",
+        indices[i],
+        " is out of bounds for dimension with size ",
+        dim_size);
+  }
+  return index_cpu.to(at::kInt);
+}
+
 Tensor scatter_src(
     const Tensor& self_arg,
     int64_t dim,
@@ -19,10 +33,31 @@ Tensor scatter_src(
     const Tensor& src_arg) {
   TORCH_CHECK(
       self_arg.dim() >= 1 && self_arg.dim() <= 4,
-      "Vulkan scatter: input must be 1-4D, got ", self_arg.dim(), "D");
+      "Vulkan scatter: input must be 1-4D, got ",
+      self_arg.dim(),
+      "D");
   TORCH_CHECK(
       index_arg.scalar_type() == at::kLong,
       "Vulkan scatter: index must have dtype int64");
+  TORCH_CHECK(
+      index_arg.dim() == self_arg.dim() && src_arg.dim() == index_arg.dim(),
+      "Vulkan scatter: self, index, and src must have the same number of dimensions");
+  TORCH_CHECK(
+      src_arg.scalar_type() == self_arg.scalar_type(),
+      "Vulkan scatter: self and src must have the same dtype");
+
+  const int64_t ndim = self_arg.dim();
+  const int64_t norm_dim = utils::normalize(dim, ndim);
+  for (const auto d : c10::irange(index_arg.dim())) {
+    TORCH_CHECK(
+        index_arg.size(d) <= src_arg.size(d),
+        "Vulkan scatter: index size must not exceed src size at dimension ",
+        d);
+    TORCH_CHECK(
+        d == norm_dim || index_arg.size(d) <= self_arg.size(d),
+        "Vulkan scatter: index size must not exceed self size at dimension ",
+        d);
+  }
 
   api::Context* const context = api::context();
 
@@ -31,7 +66,7 @@ Tensor scatter_src(
 
   const vTensor& v_self = convert(self);
   const vTensor& v_src = convert(src);
-  const Tensor index_cpu = index_arg.cpu().to(at::kInt).contiguous();
+  const Tensor index_cpu = validate_indices(index_arg, self_arg.size(norm_dim));
 
   vTensor v_output{
       context,
@@ -39,13 +74,9 @@ Tensor scatter_src(
       v_self.dtype(),
   };
 
-  const int64_t ndim = self_arg.dim();
-  const int64_t norm_dim = utils::normalize(dim, ndim);
-
   api::StorageBuffer index_buffer(context, api::kInt, index_cpu.numel());
   {
-    api::MemoryMap mapping(
-        index_buffer.buffer(), api::MemoryAccessType::WRITE);
+    api::MemoryMap mapping(index_buffer.buffer(), api::MemoryAccessType::WRITE);
     memcpy(
         mapping.template data<int32_t>(),
         index_cpu.const_data_ptr<int32_t>(),
@@ -58,6 +89,7 @@ Tensor scatter_src(
     ivec4 out_extents;
     ivec4 self_sizes;
     ivec4 index_sizes;
+    ivec4 src_sizes;
     int32_t dim;
     int32_t src_dim_size;
   } block{
@@ -78,6 +110,12 @@ Tensor scatter_src(
           safe_downcast<int32_t>(get_dim<Dim4D::Height>(index_arg)),
           safe_downcast<int32_t>(get_dim<Dim4D::Channel>(index_arg)),
           safe_downcast<int32_t>(get_dim<Dim4D::Batch>(index_arg)),
+      },
+      {
+          safe_downcast<int32_t>(get_dim<Dim4D::Width>(v_src)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Height>(v_src)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Channel>(v_src)),
+          safe_downcast<int32_t>(get_dim<Dim4D::Batch>(v_src)),
       },
       safe_downcast<int32_t>(norm_dim + 4 - ndim),
       safe_downcast<int32_t>(src_dim_size),

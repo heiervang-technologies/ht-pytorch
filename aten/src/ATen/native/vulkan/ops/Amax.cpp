@@ -12,13 +12,12 @@ namespace {
 
 using namespace api::utils;
 
-Tensor amax_dim(
-    const at::Tensor& self,
-    int64_t dim,
-    bool keepdim) {
+Tensor amax_dim(const at::Tensor& self, int64_t dim, bool keepdim) {
   TORCH_CHECK(
       self.dim() >= 1 && self.dim() <= 4,
-      "Vulkan amax supports 1-4D tensors, got ", self.dim(), "D");
+      "Vulkan amax supports 1-4D tensors, got ",
+      self.dim(),
+      "D");
 
   api::Context* const context = api::context();
 
@@ -70,10 +69,7 @@ Tensor amax_dim(
   return convert(v_output);
 }
 
-Tensor amax(
-    const at::Tensor& self,
-    IntArrayRef dims,
-    bool keepdim) {
+Tensor amax(const at::Tensor& self, IntArrayRef dims, bool keepdim) {
   TORCH_CHECK(!dims.empty(), "Vulkan amax requires at least one dim");
 
   std::set<int64_t> dims_set;
@@ -81,7 +77,11 @@ Tensor amax(
     TORCH_CHECK(
         d >= -self.dim() && d <= self.dim() - 1,
         "Vulkan amax dimension out of range [",
-        -self.dim(), ",", self.dim() - 1, "], got ", d);
+        -self.dim(),
+        ",",
+        self.dim() - 1,
+        "], got ",
+        d);
     dims_set.insert(utils::normalize(d, self.dim()));
   }
 
@@ -92,13 +92,12 @@ Tensor amax(
   return result;
 }
 
-Tensor amin_dim(
-    const at::Tensor& self,
-    int64_t dim,
-    bool keepdim) {
+Tensor amin_dim(const at::Tensor& self, int64_t dim, bool keepdim) {
   TORCH_CHECK(
       self.dim() >= 1 && self.dim() <= 4,
-      "Vulkan amin supports 1-4D tensors, got ", self.dim(), "D");
+      "Vulkan amin supports 1-4D tensors, got ",
+      self.dim(),
+      "D");
 
   api::Context* const context = api::context();
 
@@ -151,10 +150,7 @@ Tensor amin_dim(
   return convert(v_output);
 }
 
-Tensor amin(
-    const at::Tensor& self,
-    IntArrayRef dims,
-    bool keepdim) {
+Tensor amin(const at::Tensor& self, IntArrayRef dims, bool keepdim) {
   TORCH_CHECK(!dims.empty(), "Vulkan amin requires at least one dim");
 
   std::set<int64_t> dims_set;
@@ -162,7 +158,11 @@ Tensor amin(
     TORCH_CHECK(
         d >= -self.dim() && d <= self.dim() - 1,
         "Vulkan amin dimension out of range [",
-        -self.dim(), ",", self.dim() - 1, "], got ", d);
+        -self.dim(),
+        ",",
+        self.dim() - 1,
+        "], got ",
+        d);
     dims_set.insert(utils::normalize(d, self.dim()));
   }
 

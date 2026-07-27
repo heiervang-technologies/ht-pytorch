@@ -713,8 +713,7 @@ Tensor run_addmm_context(
   };
   params = api::UniformParamsBuffer(context, block_no_bias);
 
-  const bool use_matvec =
-      input_arg_2d.sizes()[Layout::Parameter::height] == 1;
+  const bool use_matvec = input_arg_2d.sizes()[Layout::Parameter::height] == 1;
   compute_shader = use_matvec ? VK_KERNEL(matvec) : VK_KERNEL(mm);
 
   api::PipelineBarrier pipeline_barrier{};
@@ -725,8 +724,7 @@ Tensor run_addmm_context(
         compute_shader,
         pipeline_barrier,
         {
-            safe_downcast<uint32_t>(
-                v_output.sizes()[Layout::Parameter::width]),
+            safe_downcast<uint32_t>(v_output.sizes()[Layout::Parameter::width]),
             1,
             1,
         },
@@ -746,8 +744,8 @@ Tensor run_addmm_context(
         {
             safe_downcast<uint32_t>(
                 div_up(v_output.sizes()[Layout::Parameter::width], INT64_C(4))),
-            safe_downcast<uint32_t>(
-                div_up(v_output.sizes()[Layout::Parameter::height], INT64_C(4))),
+            safe_downcast<uint32_t>(div_up(
+                v_output.sizes()[Layout::Parameter::height], INT64_C(4))),
             1,
         },
         {8, 8, 1},

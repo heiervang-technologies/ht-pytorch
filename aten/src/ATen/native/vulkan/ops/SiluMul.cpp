@@ -11,6 +11,13 @@ namespace {
 using namespace api::utils;
 
 Tensor silu_mul(const Tensor& input_arg) {
+  TORCH_CHECK(
+      input_arg.dim() >= 1,
+      "Vulkan SiLU-mul: input must have at least one dimension");
+  TORCH_CHECK(
+      input_arg.size(-1) % 2 == 0,
+      "Vulkan SiLU-mul: final dimension must be even");
+
   api::Context* const context = api::context();
 
   const Tensor input = input_arg.is_vulkan() ? input_arg : input_arg.vulkan();

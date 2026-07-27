@@ -12,6 +12,20 @@ namespace {
 
 using namespace api::utils;
 
+Tensor validate_indices(const Tensor& index_arg, const int64_t dim_size) {
+  const Tensor index_cpu = index_arg.cpu().contiguous();
+  const int64_t* const indices = index_cpu.const_data_ptr<int64_t>();
+  for (const auto i : c10::irange(index_cpu.numel())) {
+    TORCH_CHECK(
+        indices[i] >= 0 && indices[i] < dim_size,
+        "Vulkan gather: index ",
+        indices[i],
+        " is out of bounds for dimension with size ",
+        dim_size);
+  }
+  return index_cpu.to(at::kInt);
+}
+
 Tensor gather(
     const Tensor& self_arg,
     const int64_t dim,
@@ -19,16 +33,30 @@ Tensor gather(
     bool sparse_grad) {
   TORCH_CHECK(
       self_arg.dim() >= 1 && self_arg.dim() <= 4,
-      "Vulkan gather: input must be 1-4D, got ", self_arg.dim(), "D");
+      "Vulkan gather: input must be 1-4D, got ",
+      self_arg.dim(),
+      "D");
   TORCH_CHECK(
       index_arg.scalar_type() == at::kLong,
       "Vulkan gather: index must have dtype int64");
+  TORCH_CHECK(
+      index_arg.dim() == self_arg.dim(),
+      "Vulkan gather: input and index must have the same number of dimensions");
+
+  const int64_t ndim = self_arg.dim();
+  const int64_t norm_dim = utils::normalize(dim, ndim);
+  for (const auto d : c10::irange(ndim)) {
+    TORCH_CHECK(
+        d == norm_dim || index_arg.size(d) <= self_arg.size(d),
+        "Vulkan gather: index size must not exceed input size at dimension ",
+        d);
+  }
 
   api::Context* const context = api::context();
 
   const Tensor self = self_arg.is_vulkan() ? self_arg : self_arg.vulkan();
   const vTensor& v_self = convert(self);
-  const Tensor index_cpu = index_arg.cpu().to(at::kInt).contiguous();
+  const Tensor index_cpu = validate_indices(index_arg, self_arg.size(norm_dim));
 
   vTensor v_output{
       context,
@@ -36,13 +64,9 @@ Tensor gather(
       v_self.dtype(),
   };
 
-  const int64_t ndim = self_arg.dim();
-  const int64_t norm_dim = utils::normalize(dim, ndim);
-
   api::StorageBuffer index_buffer(context, api::kInt, index_cpu.numel());
   {
-    api::MemoryMap mapping(
-        index_buffer.buffer(), api::MemoryAccessType::WRITE);
+    api::MemoryMap mapping(index_buffer.buffer(), api::MemoryAccessType::WRITE);
     memcpy(
         mapping.template data<int32_t>(),
         index_cpu.const_data_ptr<int32_t>(),

@@ -12,7 +12,8 @@ namespace {
 using namespace api::utils;
 
 Tensor& fill_scalar(Tensor& self_arg, const Scalar& value) {
-  TORCH_CHECK(self_arg.is_vulkan(), "Vulkan fill_: input must be a Vulkan tensor");
+  TORCH_CHECK(
+      self_arg.is_vulkan(), "Vulkan fill_: input must be a Vulkan tensor");
 
   api::Context* const context = api::context();
   vTensor& v_self = convert(self_arg);
@@ -94,8 +95,7 @@ Tensor& fill_scalar(Tensor& self_arg, const Scalar& value) {
 
 Tensor& fill_tensor(Tensor& self_arg, const Tensor& value) {
   TORCH_CHECK(
-      value.dim() == 0,
-      "Vulkan fill_: value tensor must be 0-dimensional");
+      value.dim() == 0, "Vulkan fill_: value tensor must be 0-dimensional");
   return fill_scalar(self_arg, value.item());
 }
 

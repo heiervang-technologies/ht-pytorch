@@ -19,8 +19,8 @@ Tensor& zero_(at::Tensor& self) {
   api::Context* const context = api::context();
   api::PipelineBarrier pipeline_barrier{};
 
-  const auto shader = (v_self.dtype() == api::kBool)
-      ? VK_KERNEL(zero_int) : VK_KERNEL(zero);
+  const auto shader =
+      (v_self.dtype() == api::kBool) ? VK_KERNEL(zero_int) : VK_KERNEL(zero);
 
   context->submit_compute_job(
       shader,
@@ -46,9 +46,8 @@ Tensor zeros(
 
   api::Context* const context = api::context();
 
-  const auto scalar_type = dtype.has_value()
-      ? convert_dtype(dtype.value())
-      : api::ScalarType::Float;
+  const auto scalar_type =
+      dtype.has_value() ? convert_dtype(dtype.value()) : api::ScalarType::Float;
 
   vTensor v_output{
       context,
@@ -58,8 +57,8 @@ Tensor zeros(
 
   api::PipelineBarrier pipeline_barrier{};
 
-  const auto shader = (scalar_type == api::kBool)
-      ? VK_KERNEL(zero_int) : VK_KERNEL(zero);
+  const auto shader =
+      (scalar_type == api::kBool) ? VK_KERNEL(zero_int) : VK_KERNEL(zero);
 
   context->submit_compute_job(
       shader,

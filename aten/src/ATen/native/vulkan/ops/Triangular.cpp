@@ -17,8 +17,7 @@ Tensor triangular_op(
     int64_t diagonal,
     const api::ShaderInfo& shader_descriptor) {
   TORCH_CHECK(
-      self_arg.dim() >= 2,
-      "Vulkan triu/tril: input must be at least 2D");
+      self_arg.dim() >= 2, "Vulkan triu/tril: input must be at least 2D");
 
   api::Context* const context = api::context();
 

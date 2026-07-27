@@ -17,7 +17,8 @@ Tensor layer_norm(
   api::Context* const context = api::context();
 
   const Tensor input = input_arg.is_vulkan() ? input_arg : input_arg.vulkan();
-  const Tensor weight = weight_arg.is_vulkan() ? weight_arg : weight_arg.vulkan();
+  const Tensor weight =
+      weight_arg.is_vulkan() ? weight_arg : weight_arg.vulkan();
   const Tensor bias = bias_arg.is_vulkan() ? bias_arg : bias_arg.vulkan();
 
   const vTensor& v_input = convert(input);
