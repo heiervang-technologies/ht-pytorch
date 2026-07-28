@@ -8,6 +8,23 @@
 
 layout(std430) buffer;
 
+vec4 signed_pow(const vec4 base, const vec4 exponent) {
+  const vec4 magnitude = pow(abs(base), exponent);
+  const vec4 negative_base = vec4(lessThan(base, vec4(0.0)));
+  const vec4 finite_exponent =
+      vec4(not(isinf(exponent))) * vec4(not(isnan(exponent)));
+  const vec4 integer_exponent =
+      vec4(equal(exponent, trunc(exponent))) * finite_exponent;
+  const vec4 odd_exponent =
+      vec4(notEqual(mod(abs(exponent), vec4(2.0)), vec4(0.0)));
+  const vec4 sign =
+      vec4(1.0) - vec4(2.0) * negative_base * integer_exponent * odd_exponent;
+  const vec4 invalid =
+      negative_base * finite_exponent * (vec4(1.0) - integer_exponent);
+  return mix(
+      magnitude * sign, sqrt(vec4(-1.0)), notEqual(invalid, vec4(0.0)));
+}
+
 // clang-format off
 $if not INPLACE:
   layout(set = 0, binding = 0, FORMAT) uniform PRECISION restrict writeonly image3D uOutput;

@@ -159,5 +159,26 @@ class TestVulkanRewritePass(TestCase):
             prepack_removal=True,
             fuse_clamping_ops=True)
 
+
+@unittest.skipUnless(torch.is_vulkan_available(),
+                     "Vulkan backend must be available for these tests.")
+class TestVulkanNativeOps(TestCase):
+    def test_math_edge_contracts(self):
+        base = torch.tensor([-2.0, -2.0, -2.0, 2.0])
+        exponent = torch.tensor([3.0, 2.0, 0.5, 3.0])
+        actual_pow = torch.pow(base.vulkan(), exponent.vulkan()).cpu()
+        expected_pow = torch.pow(base, exponent)
+        self.assertEqual(actual_pow[:2], expected_pow[:2])
+        self.assertTrue(torch.isnan(actual_pow[2]).item())
+        self.assertEqual(actual_pow[3], expected_pow[3])
+
+        self.assertEqual(base.vulkan().pow(3).cpu(), base.pow(3))
+        fractional_pow = base.vulkan().pow(0.5).cpu()
+        self.assertTrue(torch.isnan(fractional_pow[:3]).all().item())
+
+        halfway = torch.tensor([-2.5, -1.5, -0.5, 0.5, 1.5, 2.5])
+        self.assertEqual(torch.round(halfway.vulkan()).cpu(), torch.round(halfway))
+
+
 if __name__ == "__main__":
     run_tests()
