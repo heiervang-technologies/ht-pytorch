@@ -10,12 +10,14 @@ def flush_vulkan_queue(request):
     """
     try:
         from pytorch_vulkan import _C
+
         _C.flush()
     except (ImportError, AttributeError):
         pass
     yield
     try:
         from pytorch_vulkan import _C
+
         _C.flush()
     except (ImportError, AttributeError):
         pass
@@ -23,6 +25,7 @@ def flush_vulkan_queue(request):
     # between tests (especially torch.compile backends).
     try:
         import torch._dynamo
+
         torch._dynamo.reset()
     except Exception:
         pass

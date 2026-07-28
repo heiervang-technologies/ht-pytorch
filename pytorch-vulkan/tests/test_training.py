@@ -1,15 +1,20 @@
 """Training / AOT Autograd integration tests."""
 
+import logging
+
 import pytest
+import pytorch_vulkan
 import torch
 import torch.nn as nn
-import logging
-import pytorch_vulkan
+
+
 pytorch_vulkan.init()
+
 
 def requires_vulkan(fn):
     try:
         from pytorch_vulkan import is_available
+
         available = is_available()
     except ImportError:
         available = False
@@ -19,7 +24,7 @@ def requires_vulkan(fn):
 @requires_vulkan
 def test_aot_autograd_pointwise():
     """Test that AOT Autograd traces forward+backward for pointwise ops."""
-    from pytorch_vulkan import register_training, get_backward_op_report
+    from pytorch_vulkan import get_backward_op_report, register_training
 
     logging.basicConfig(level=logging.INFO)
     register_training()
@@ -45,7 +50,7 @@ def test_aot_autograd_pointwise():
 @requires_vulkan
 def test_aot_autograd_matmul():
     """Test AOT Autograd with matmul to discover backward ops."""
-    from pytorch_vulkan import register_training, get_backward_op_report
+    from pytorch_vulkan import get_backward_op_report, register_training
 
     logging.basicConfig(level=logging.INFO)
     register_training()
@@ -71,7 +76,7 @@ def test_aot_autograd_matmul():
 def test_aot_autograd_simple_mlp():
     """Test AOT Autograd with a simple MLP to discover the full op set
     needed for real training."""
-    from pytorch_vulkan import register_training, get_backward_op_report
+    from pytorch_vulkan import get_backward_op_report, register_training
 
     logging.basicConfig(level=logging.INFO)
     register_training()
@@ -106,28 +111,31 @@ def test_aot_autograd_simple_mlp():
     print("\n" + report)
     # This report tells us exactly which backward ops need SPIR-V shaders.
 
+
 @requires_vulkan
 def test_aot_autograd_adam():
     class SimpleModel(nn.Module):
         def __init__(self):
             super().__init__()
             self.linear = nn.Linear(16, 8)
+
         def forward(self, x):
             return self.linear(x)
-            
+
     model = SimpleModel().to("vkgpu:0")
     opt = torch.optim.Adam(model.parameters(), lr=0.001)
 
     compiled_model = torch.compile(model, backend="vulkan_train")
-    
+
     x = torch.randn(4, 16, device="vkgpu:0")
     target = torch.randn(4, 8, device="vkgpu:0")
-    
+
     out = compiled_model(x)
     loss = (out - target).pow(2).mean()
     loss.backward()
     opt.step()
     opt.zero_grad()
+
 
 @requires_vulkan
 def test_aot_autograd_adamw():
@@ -135,17 +143,18 @@ def test_aot_autograd_adamw():
         def __init__(self):
             super().__init__()
             self.linear = nn.Linear(16, 8)
+
         def forward(self, x):
             return self.linear(x)
-            
+
     model = SimpleModel().to("vkgpu:0")
     opt = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
 
     compiled_model = torch.compile(model, backend="vulkan_train")
-    
+
     x = torch.randn(4, 16, device="vkgpu:0")
     target = torch.randn(4, 8, device="vkgpu:0")
-    
+
     out = compiled_model(x)
     loss = (out - target).pow(2).mean()
     loss.backward()

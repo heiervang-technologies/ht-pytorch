@@ -1,6 +1,7 @@
 """Integration test: RoPE + Attention + LayerNorm transformer block on Vulkan."""
 
 import math
+
 import pytest
 import torch
 import torch.nn as nn
@@ -9,6 +10,7 @@ import torch.nn as nn
 def requires_vulkan(fn):
     try:
         from pytorch_vulkan import init, is_available
+
         init()
         available = is_available()
     except ImportError:
@@ -52,6 +54,7 @@ def test_rope_basic():
 
     # Vulkan RoPE via the custom op
     from pytorch_vulkan import _C
+
     _C.flush()
 
     x_vk = vk(x.contiguous().view(B * H, S, D))
@@ -78,8 +81,8 @@ def test_transformer_block_shapes():
 
     # Build a simple transformer encoder layer and run on Vulkan.
     layer = nn.TransformerEncoderLayer(
-        d_model=D, nhead=H, dim_feedforward=D * 4,
-        dropout=0.0, batch_first=True)
+        d_model=D, nhead=H, dim_feedforward=D * 4, dropout=0.0, batch_first=True
+    )
     layer.eval()
 
     x = torch.randn(B, S, D)
@@ -93,6 +96,7 @@ def test_transformer_block_shapes():
     layer_vk = layer.to("vkgpu:0")
 
     from pytorch_vulkan import _C
+
     _C.flush()
 
     with torch.no_grad():
@@ -100,8 +104,7 @@ def test_transformer_block_shapes():
     _C.flush()
 
     assert out_vk.shape == (B, S, D)
-    torch.testing.assert_close(
-        out_vk.to("cpu"), out_cpu, atol=1e-3, rtol=1e-2)
+    torch.testing.assert_close(out_vk.to("cpu"), out_cpu, atol=1e-3, rtol=1e-2)
 
 
 @requires_vulkan
@@ -135,8 +138,7 @@ def test_transformer_training_step_vulkan():
     # Training step.
     optimizer.zero_grad()
     logits = model(tokens)
-    loss = nn.functional.cross_entropy(
-        logits.view(-1, vocab_size), targets.view(-1))
+    loss = nn.functional.cross_entropy(logits.view(-1, vocab_size), targets.view(-1))
     _C.flush()
 
     loss_val = loss.item()
@@ -157,8 +159,7 @@ def test_transformer_training_step_vulkan():
 
     # Verify parameters changed.
     logits2 = model(tokens)
-    loss2 = nn.functional.cross_entropy(
-        logits2.view(-1, vocab_size), targets.view(-1))
+    loss2 = nn.functional.cross_entropy(logits2.view(-1, vocab_size), targets.view(-1))
     _C.flush()
     loss2_val = loss2.item()
 

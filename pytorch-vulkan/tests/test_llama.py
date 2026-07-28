@@ -1,9 +1,10 @@
+import pytest
+import pytorch_vulkan
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pytest
-import pytorch_vulkan
 from pytorch_vulkan.flash_attention import flash_attention_vulkan
+
 
 def apply_rotary_emb(x, cos, sin):
     # Fallback RoPE implementation for CPU
@@ -12,6 +13,7 @@ def apply_rotary_emb(x, cos, sin):
     x1, x2 = x[..., :half_D], x[..., half_D:]
     rotated = torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
     return rotated
+
 
 class LlamaAttention(nn.Module):
     def __init__(self, hidden_size, num_heads):
@@ -25,9 +27,21 @@ class LlamaAttention(nn.Module):
 
     def forward(self, hidden_states, cos, sin):
         B, S, _ = hidden_states.shape
-        q = self.q_proj(hidden_states).view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
-        k = self.k_proj(hidden_states).view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(hidden_states).view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
+        q = (
+            self.q_proj(hidden_states)
+            .view(B, S, self.num_heads, self.head_dim)
+            .transpose(1, 2)
+        )
+        k = (
+            self.k_proj(hidden_states)
+            .view(B, S, self.num_heads, self.head_dim)
+            .transpose(1, 2)
+        )
+        v = (
+            self.v_proj(hidden_states)
+            .view(B, S, self.num_heads, self.head_dim)
+            .transpose(1, 2)
+        )
 
         if hidden_states.device.type == "cpu":
             q = apply_rotary_emb(q, cos, sin)
@@ -41,6 +55,7 @@ class LlamaAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous().view(B, S, -1)
         return self.o_proj(attn_output)
 
+
 class LlamaMLP(nn.Module):
     def __init__(self, hidden_size, intermediate_size):
         super().__init__()
@@ -50,6 +65,7 @@ class LlamaMLP(nn.Module):
 
     def forward(self, x):
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
+
 
 class LlamaBlock(nn.Module):
     def __init__(self, hidden_size, num_heads, intermediate_size):
@@ -66,6 +82,7 @@ class LlamaBlock(nn.Module):
         hidden_states = hidden_states + self.mlp(normed)
         return hidden_states
 
+
 def test_llama_block_f16():
     pytorch_vulkan.init()
     if not pytorch_vulkan.is_available():
@@ -78,7 +95,7 @@ def test_llama_block_f16():
 
     # CPU reference model
     block = LlamaBlock(hidden_size, H, intermediate_size).to(torch.float16)
-    
+
     hidden_states = torch.randn(B, S, hidden_size, dtype=torch.float16)
     # Proper RoPE frequencies (not random - random cos/sin can cause NaN in f16)
     pos = torch.arange(S).float()
@@ -100,15 +117,17 @@ def test_llama_block_f16():
     vk_sin = sin.to("vkgpu:0")
 
     out_vk = vk_block(vk_hidden_states, vk_cos, vk_sin)
-    
+
     # FP16 accumulates rounding errors through RMSNorm + attention + MLP.
     # Verify outputs are in the same ballpark (not NaN, same magnitude).
     from pytorch_vulkan import _C
+
     _C.flush()
     out_vk_cpu = out_vk.cpu()
     assert not out_vk_cpu.isnan().any(), "Output contains NaN"
     assert not out_vk_cpu.isinf().any(), "Output contains Inf"
     torch.testing.assert_close(out_vk_cpu, out_cpu, atol=1.0, rtol=0.5)
+
 
 if __name__ == "__main__":
     test_llama_block_f16()

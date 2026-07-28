@@ -1,11 +1,12 @@
 """Autoregressive text generation with TinyLlama on Vulkan using KV-cache."""
 
-import math
+import sys
+
 import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import sys
+
 
 sys.path.insert(0, "tests")
 
@@ -13,6 +14,7 @@ sys.path.insert(0, "tests")
 def requires_vulkan(fn):
     try:
         from pytorch_vulkan import init, is_available
+
         init()
         available = is_available()
     except ImportError:
@@ -24,8 +26,8 @@ def apply_rotary_emb(x, cos, sin):
     D = x.shape[-1]
     half_D = D // 2
     x1, x2 = x[..., :half_D], x[..., half_D:]
-    cos = cos[:x.shape[-2], :].unsqueeze(0).unsqueeze(0)
-    sin = sin[:x.shape[-2], :].unsqueeze(0).unsqueeze(0)
+    cos = cos[: x.shape[-2], :].unsqueeze(0).unsqueeze(0)
+    sin = sin[: x.shape[-2], :].unsqueeze(0).unsqueeze(0)
     return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
 
 
@@ -48,8 +50,8 @@ class GenerativeLlamaAttention(nn.Module):
         v = self.v_proj(x).view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
 
         # RoPE with position offset for KV-cache
-        pos_cos = cos[start_pos:start_pos + S]
-        pos_sin = sin[start_pos:start_pos + S]
+        pos_cos = cos[start_pos : start_pos + S]
+        pos_sin = sin[start_pos : start_pos + S]
         q = apply_rotary_emb(q, pos_cos, pos_sin)
         k = apply_rotary_emb(k, pos_cos, pos_sin)
 
@@ -59,6 +61,7 @@ class GenerativeLlamaAttention(nn.Module):
         # Use flash_attention_kvcache for f16 native attention with f32 accumulation.
         # Falls back to f32 decomposed if shader unavailable.
         from pytorch_vulkan import flash_attention_kvcache
+
         out = flash_attention_kvcache(q, k, v)
 
         out = out.transpose(1, 2).contiguous().view(B, S, -1)
@@ -91,8 +94,15 @@ class GenerativeLlamaBlock(nn.Module):
 
 
 class GenerativeTinyLlama(nn.Module):
-    def __init__(self, vocab_size=256, hidden_size=128, num_heads=4,
-                 num_layers=2, intermediate_size=512, max_seq_len=64):
+    def __init__(
+        self,
+        vocab_size=256,
+        hidden_size=128,
+        num_heads=4,
+        num_layers=2,
+        intermediate_size=512,
+        max_seq_len=64,
+    ):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
@@ -100,16 +110,20 @@ class GenerativeTinyLlama(nn.Module):
         self.head_dim = hidden_size // num_heads
 
         self.embed = nn.Embedding(vocab_size, hidden_size)
-        self.layers = nn.ModuleList([
-            GenerativeLlamaBlock(hidden_size, num_heads, intermediate_size)
-            for _ in range(num_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [
+                GenerativeLlamaBlock(hidden_size, num_heads, intermediate_size)
+                for _ in range(num_layers)
+            ]
+        )
         self.norm = nn.RMSNorm(hidden_size, eps=1e-5)
         self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
 
         half_d = self.head_dim // 2
         pos = torch.arange(max_seq_len).float()
-        freq = 1.0 / (10000.0 ** (torch.arange(0, half_d, dtype=torch.float32) / half_d))
+        freq = 1.0 / (
+            10000.0 ** (torch.arange(0, half_d, dtype=torch.float32) / half_d)
+        )
         angles = pos.unsqueeze(1) * freq.unsqueeze(0)
         self.register_buffer("cos_cache", angles.cos())
         self.register_buffer("sin_cache", angles.sin())
@@ -123,12 +137,18 @@ class GenerativeTinyLlama(nn.Module):
         device = prompt_tokens.device
 
         kv_caches = LayerKVCache(
-            self.num_layers, B, self.num_heads, 64,
-            self.head_dim, dtype=self.lm_head.weight.dtype, device=device,
+            self.num_layers,
+            B,
+            self.num_heads,
+            64,
+            self.head_dim,
+            dtype=self.lm_head.weight.dtype,
+            device=device,
         )
         # Flush to ensure KV-cache zero_() completes before use
         try:
             from pytorch_vulkan import _C
+
             _C.flush()
         except Exception:
             pass
@@ -136,8 +156,7 @@ class GenerativeTinyLlama(nn.Module):
         # Prefill: process entire prompt
         x = self.embed(prompt_tokens)
         for i, layer in enumerate(self.layers):
-            x = layer(x, self.cos_cache, self.sin_cache,
-                      kv_caches[i], start_pos=0)
+            x = layer(x, self.cos_cache, self.sin_cache, kv_caches[i], start_pos=0)
         x = self.norm(x)
         logits = self.lm_head(x[:, -1:, :])  # last token logits
         next_token = logits.argmax(dim=-1)
@@ -149,8 +168,9 @@ class GenerativeTinyLlama(nn.Module):
         for step in range(max_new_tokens - 1):
             x = self.embed(next_token)
             for i, layer in enumerate(self.layers):
-                x = layer(x, self.cos_cache, self.sin_cache,
-                          kv_caches[i], start_pos=start_pos)
+                x = layer(
+                    x, self.cos_cache, self.sin_cache, kv_caches[i], start_pos=start_pos
+                )
             x = self.norm(x)
             logits = self.lm_head(x)
             next_token = logits.argmax(dim=-1)
@@ -212,5 +232,6 @@ def test_generation_deterministic():
     # Subsequent tokens may diverge due to KV-cache buffer pool reuse
     # and floating point non-determinism in GPU shaders.
     g1, g2 = gen1.to("cpu"), gen2.to("cpu")
-    assert g1[0, 0] == g2[0, 0], \
-        f"First token non-deterministic: {g1[0,0].item()} vs {g2[0,0].item()}"
+    assert g1[0, 0] == g2[0, 0], (
+        f"First token non-deterministic: {g1[0, 0].item()} vs {g2[0, 0].item()}"
+    )
