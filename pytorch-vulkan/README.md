@@ -117,3 +117,7 @@ GitHub repository is no longer publicly resolvable. The snapshot commit and
 its author metadata are retained, but the missing upstream objects cannot be
 reconstructed from this checkout. A future history import must use an
 authoritative bundle or repository supplied by the original maintainers.
+
+## License
+
+The standalone package is distributed under the [MIT License](LICENSE).
