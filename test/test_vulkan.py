@@ -163,6 +163,68 @@ class TestVulkanRewritePass(TestCase):
 @unittest.skipUnless(torch.is_vulkan_available(),
                      "Vulkan backend must be available for these tests.")
 class TestVulkanNativeOps(TestCase):
+    def test_review_regressions(self):
+        gather_input = torch.arange(24, dtype=torch.float).reshape(2, 3, 4)
+        gather_index = torch.tensor(
+            [[[3, 1], [0, 2], [1, 1]],
+             [[2, 0], [3, 1], [0, 2]]],
+            dtype=torch.long)
+        expected_gather = torch.gather(gather_input, -1, gather_index)
+        actual_gather = torch.gather(
+            gather_input.vulkan(), -1, gather_index).cpu()
+        self.assertEqual(actual_gather, expected_gather)
+
+        scatter_src = torch.arange(12, dtype=torch.float).reshape(2, 3, 2)
+        expected_scatter = gather_input.scatter(
+            -1, gather_index, scatter_src)
+        actual_scatter = gather_input.vulkan().scatter(
+            -1, gather_index, scatter_src.vulkan()).cpu()
+        self.assertEqual(actual_scatter, expected_scatter)
+
+        condition = torch.tensor([[[True], [False]]])
+        where_self = torch.randn(3, 2, 4, dtype=torch.float)
+        where_other = torch.randn(1, 1, 4, dtype=torch.half)
+        where_expected = torch.where(condition, where_self, where_other)
+        where_actual = torch.where(
+            condition, where_self.vulkan(), where_other).cpu()
+        self.assertEqual(where_actual, where_expected)
+
+    def test_index_validation_and_scatter_source_strides(self):
+        gather_input = torch.arange(4, dtype=torch.float).vulkan()
+        for invalid_index in (-1, 2**32):
+            with self.assertRaisesRegex(RuntimeError, "out of bounds"):
+                torch.gather(
+                    gather_input, 0,
+                    torch.tensor([invalid_index], dtype=torch.long))
+            with self.assertRaisesRegex(RuntimeError, "out of bounds"):
+                torch.zeros(4).vulkan().scatter(
+                    0,
+                    torch.tensor([invalid_index], dtype=torch.long),
+                    torch.ones(1).vulkan())
+
+        select_input = torch.arange(
+            2 * 3 * 4 * 5, dtype=torch.float).reshape(2, 3, 4, 5)
+        for invalid_index in (-1, 2**32):
+            with self.assertRaisesRegex(RuntimeError, "out of bounds"):
+                torch.index_select(
+                    select_input.vulkan(), -1,
+                    torch.tensor([invalid_index], dtype=torch.long))
+
+        with self.assertRaisesRegex(RuntimeError, "final two dimensions"):
+            torch.index_select(
+                select_input.vulkan(), 0, torch.tensor([0], dtype=torch.long))
+        with self.assertRaisesRegex(RuntimeError, "final two dimensions"):
+            torch.index_select(
+                select_input.vulkan(), 1, torch.tensor([0], dtype=torch.long))
+
+        scatter_self = torch.zeros(2, 8, 1, 1)
+        scatter_index = torch.arange(4).reshape(1, 4, 1, 1).expand(2, -1, -1, -1)
+        scatter_src = torch.arange(16, dtype=torch.float).reshape(2, 8, 1, 1)
+        expected = scatter_self.scatter(1, scatter_index, scatter_src)
+        actual = scatter_self.vulkan().scatter(
+            1, scatter_index, scatter_src.vulkan()).cpu()
+        self.assertEqual(actual, expected)
+
     def test_math_edge_contracts(self):
         base = torch.tensor([-2.0, -2.0, -2.0, 2.0])
         exponent = torch.tensor([3.0, 2.0, 0.5, 3.0])
