@@ -1,0 +1,18 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Values {
+    float values[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+} pc;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index < pc.num_elements && isnan(values[index])) {
+        values[index] = 0.0;
+    }
+}

@@ -1,0 +1,26 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Scores {
+    float scores[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+    uint query_length;
+    uint key_length;
+};
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= num_elements) {
+        return;
+    }
+    uint matrix_index = index % (query_length * key_length);
+    uint query_index = matrix_index / key_length;
+    uint key_index = matrix_index % key_length;
+    if (key_index > query_index) {
+        scores[index] = uintBitsToFloat(0xff800000u);
+    }
+}

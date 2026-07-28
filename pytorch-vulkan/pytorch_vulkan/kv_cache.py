@@ -5,7 +5,6 @@ step, avoiding recomputation of attention over the full sequence.
 """
 
 import torch
-from typing import Optional, Tuple
 
 
 class KVCache:
@@ -31,17 +30,25 @@ class KVCache:
         # torch.zeros on Vulkan may get a pooled buffer with stale data
         # if the zero fill hasn't flushed before reuse.
         self.k_cache = torch.empty(
-            batch_size, num_heads, max_seq_len, head_dim,
-            dtype=dtype, device=device,
+            batch_size,
+            num_heads,
+            max_seq_len,
+            head_dim,
+            dtype=dtype,
+            device=device,
         ).zero_()
         self.v_cache = torch.empty(
-            batch_size, num_heads, max_seq_len, head_dim,
-            dtype=dtype, device=device,
+            batch_size,
+            num_heads,
+            max_seq_len,
+            head_dim,
+            dtype=dtype,
+            device=device,
         ).zero_()
 
     def update(
         self, k_new: torch.Tensor, v_new: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Append new K/V tokens and return the full cached K/V.
 
         Args:
@@ -58,8 +65,8 @@ class KVCache:
             f"KV-cache overflow: {end_pos} > {self.max_seq_len}"
         )
 
-        self.k_cache[:, :, self.pos:end_pos, :] = k_new
-        self.v_cache[:, :, self.pos:end_pos, :] = v_new
+        self.k_cache[:, :, self.pos : end_pos, :] = k_new
+        self.v_cache[:, :, self.pos : end_pos, :] = v_new
         self.pos = end_pos
 
         return (

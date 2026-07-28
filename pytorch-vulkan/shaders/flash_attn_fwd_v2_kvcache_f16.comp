@@ -1,0 +1,175 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer QueryBuf { float16_t q_data[]; };
+layout(set = 0, binding = 1) readonly buffer KeyBuf { float16_t k_data[]; };
+layout(set = 0, binding = 2) readonly buffer ValueBuf { float16_t v_data[]; };
+layout(set = 0, binding = 3) writeonly buffer OutBuf { float16_t o_data[]; };
+layout(set = 0, binding = 4) buffer LseBuf { float lse_data[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint q_seq_len;
+    uint kv_seq_len;
+    uint d_k;
+    uint d_v;
+    float scale;
+} pc;
+
+const uint TILE_Q = 32;
+const uint TILE_K = 32;
+const uint THREADS_PER_ROW = 8;
+const uint MAX_HEAD_DIM = 64;
+
+shared float s_k[TILE_K][MAX_HEAD_DIM];
+shared float s_scores[TILE_Q][TILE_K];
+shared float s_v[TILE_K][MAX_HEAD_DIM];
+shared float s_row_state[TILE_Q][4];
+
+void main() {
+    uint head_idx = gl_WorkGroupID.y;
+    uint q_tile_idx = gl_WorkGroupID.x;
+    uint row_in_tile = gl_LocalInvocationID.x / THREADS_PER_ROW;
+    uint sub_tid = gl_LocalInvocationID.x % THREADS_PER_ROW;
+    uint tid = gl_LocalInvocationID.x;
+    uint q_row = q_tile_idx * TILE_Q + row_in_tile;
+    bool valid_q = q_row < pc.q_seq_len;
+
+    if (pc.d_k > MAX_HEAD_DIM || pc.d_v > MAX_HEAD_DIM) {
+        return;
+    }
+
+    uint q_base =
+        head_idx * pc.q_seq_len * pc.d_k + q_row * pc.d_k;
+    uint o_base =
+        head_idx * pc.q_seq_len * pc.d_v + q_row * pc.d_v;
+    uint d_per_thread =
+        (pc.d_v + THREADS_PER_ROW - 1) / THREADS_PER_ROW;
+    uint d_start = sub_tid * d_per_thread;
+
+    float q_reg[MAX_HEAD_DIM];
+    if (valid_q) {
+        for (uint i = 0; i < pc.d_k; i++) {
+            q_reg[i] = float(q_data[q_base + i]);
+        }
+    }
+
+    float o_acc[8];
+    for (uint i = 0; i < 8; i++) {
+        o_acc[i] = 0.0;
+    }
+    float row_max = -1.0 / 0.0;
+    float row_sum = 0.0;
+    uint num_k_tiles = (pc.kv_seq_len + TILE_K - 1) / TILE_K;
+
+    for (uint tile = 0; tile < num_k_tiles; tile++) {
+        uint k_start = tile * TILE_K;
+        uint total_k_elements = TILE_K * pc.d_k;
+        for (uint i = tid; i < total_k_elements; i += 256) {
+            uint tile_row = i / pc.d_k;
+            uint column = i % pc.d_k;
+            uint key_row = k_start + tile_row;
+            if (key_row < pc.kv_seq_len) {
+                uint key_idx =
+                    head_idx * pc.kv_seq_len * pc.d_k
+                    + key_row * pc.d_k + column;
+                s_k[tile_row][column] = float(k_data[key_idx]);
+            }
+        }
+        barrier();
+
+        if (sub_tid == 0 && valid_q) {
+            float tile_max = -1.0 / 0.0;
+            for (uint key = 0; key < TILE_K; key++) {
+                if (k_start + key >= pc.kv_seq_len) {
+                    s_scores[row_in_tile][key] = -1.0 / 0.0;
+                    continue;
+                }
+                float dot = 0.0;
+                for (uint column = 0; column < pc.d_k; column++) {
+                    dot += q_reg[column] * s_k[key][column];
+                }
+                float score = dot * pc.scale;
+                s_scores[row_in_tile][key] = score;
+                tile_max = max(tile_max, score);
+            }
+
+            float new_max = max(row_max, tile_max);
+            float tile_sum = 0.0;
+            for (uint key = 0; key < TILE_K; key++) {
+                if (k_start + key >= pc.kv_seq_len) {
+                    break;
+                }
+                float probability =
+                    exp(s_scores[row_in_tile][key] - new_max);
+                s_scores[row_in_tile][key] = probability;
+                tile_sum += probability;
+            }
+
+            float previous_scale = exp(row_max - new_max);
+            float new_sum = previous_scale * row_sum + tile_sum;
+            s_row_state[row_in_tile][0] =
+                row_sum > 0.0 ? previous_scale * row_sum / new_sum : 0.0;
+            s_row_state[row_in_tile][1] =
+                new_sum > 0.0 ? 1.0 / new_sum : 0.0;
+            s_row_state[row_in_tile][2] = new_max;
+            s_row_state[row_in_tile][3] = new_sum;
+        }
+        barrier();
+
+        if (valid_q) {
+            float previous_weight = s_row_state[row_in_tile][0];
+            for (uint i = 0; i < d_per_thread && d_start + i < pc.d_v; i++) {
+                o_acc[i] *= previous_weight;
+            }
+        }
+
+        if (sub_tid == 0 && valid_q) {
+            row_max = s_row_state[row_in_tile][2];
+            row_sum = s_row_state[row_in_tile][3];
+        }
+
+        uint total_v_elements = TILE_K * pc.d_v;
+        for (uint i = tid; i < total_v_elements; i += 256) {
+            uint tile_row = i / pc.d_v;
+            uint column = i % pc.d_v;
+            uint value_row = k_start + tile_row;
+            if (value_row < pc.kv_seq_len) {
+                uint value_idx =
+                    head_idx * pc.kv_seq_len * pc.d_v
+                    + value_row * pc.d_v + column;
+                s_v[tile_row][column] = float(v_data[value_idx]);
+            }
+        }
+        barrier();
+
+        if (valid_q) {
+            float new_weight = s_row_state[row_in_tile][1];
+            for (uint i = 0; i < d_per_thread && d_start + i < pc.d_v; i++) {
+                uint column = d_start + i;
+                float weighted_value = 0.0;
+                for (uint key = 0; key < TILE_K; key++) {
+                    if (k_start + key >= pc.kv_seq_len) {
+                        break;
+                    }
+                    weighted_value +=
+                        s_scores[row_in_tile][key] * s_v[key][column];
+                }
+                o_acc[i] += new_weight * weighted_value;
+            }
+        }
+        barrier();
+    }
+
+    if (valid_q) {
+        for (uint i = 0; i < d_per_thread && d_start + i < pc.d_v; i++) {
+            o_data[o_base + d_start + i] = float16_t(o_acc[i]);
+        }
+        if (sub_tid == 0) {
+            lse_data[head_idx * pc.q_seq_len + q_row] =
+                row_max + log(row_sum);
+        }
+    }
+}

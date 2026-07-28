@@ -28,7 +28,7 @@ shared float Bs[TILE_SIZE][TILE_SIZE];
 void main() {
     uint row = gl_GlobalInvocationID.y;
     uint col = gl_GlobalInvocationID.x;
-    
+
     uint tx = gl_LocalInvocationID.x;
     uint ty = gl_LocalInvocationID.y;
 
@@ -36,7 +36,7 @@ void main() {
 
     // Loop over tiles
     uint numTiles = (pc.K + TILE_SIZE - 1) / TILE_SIZE;
-    
+
     for (uint t = 0; t < numTiles; ++t) {
         // Load into shared memory with bounds checking
         if (row < pc.M && (t * TILE_SIZE + tx) < pc.K) {

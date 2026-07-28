@@ -4,14 +4,16 @@ Registers a custom SDPA op that uses the fused sdpa.comp kernel for forward
 and decomposes into existing ops (bmm, softmax, transpose) for backward.
 """
 
+import logging
 import math
 import struct
+
 import torch
 import torch.nn.functional as F
-import logging
-from typing import Optional
 
-from pytorch_vulkan.device import load_shader_bytes
+from pytorch_vulkan.device import load_shader, shader_is_live
+from pytorch_vulkan.operator_registry import shader_variant
+
 
 log = logging.getLogger(__name__)
 
@@ -21,37 +23,20 @@ _sdpa_pipeline = None
 def _ext():
     try:
         from pytorch_vulkan import _C
+
         return _C
     except ImportError:
         return None
 
 
 def _get_sdpa_pipeline():
-    """Lazily compile and cache the SDPA pipeline."""
+    """Lazily load and cache the packaged SDPA pipeline."""
     global _sdpa_pipeline
-    if _sdpa_pipeline is not None:
+    if shader_is_live(_sdpa_pipeline):
         return _sdpa_pipeline
 
-    ext = _ext()
-    if ext is None:
-        return None
-
-    from pytorch_vulkan.inductor_backend import compile_glsl_to_spirv, SHADER_DIR
-
-    shader_path = SHADER_DIR / "sdpa.comp"
-    if not shader_path.exists():
-        log.warning("sdpa.comp not found")
-        return None
-
-    spirv = compile_glsl_to_spirv(shader_path.read_text())
-    handle = load_shader_bytes(ext, spirv)
-    if handle == 0:
-        log.error("Failed to load SDPA pipeline")
-        return None
-
-    _sdpa_pipeline = handle
-    log.info("Loaded fused SDPA pipeline (handle=%d)", handle)
-    return handle
+    _sdpa_pipeline = load_shader(shader_variant("fused_sdpa", "float32"))
+    return _sdpa_pipeline
 
 
 class FusedSDPA(torch.autograd.Function):
@@ -70,16 +55,46 @@ class FusedSDPA(torch.autograd.Function):
             value: (batch, heads, seq_len, d_v)
             scale: optional float, defaults to 1/sqrt(d_k)
         """
+        if query.ndim != 4 or key.ndim != 4 or value.ndim != 4:
+            raise ValueError("Fused SDPA requires rank-4 tensors")
+        if query.device != key.device or query.device != value.device:
+            raise ValueError("Fused SDPA tensors must use the same device")
+        if query.dtype != key.dtype or query.dtype != value.dtype:
+            raise ValueError("Fused SDPA tensors must use the same dtype")
         B, H, S, D_K = query.shape
         D_V = value.shape[-1]
+        if key.shape != query.shape:
+            raise ValueError("Fused SDPA requires query and key shapes to match")
+        if value.shape[:3] != query.shape[:3]:
+            raise ValueError(
+                "Fused SDPA requires matching batch, head, and sequence dimensions"
+            )
+        if D_K == 0:
+            raise ValueError("Fused SDPA requires a non-empty query head")
 
         if scale is None:
             scale = 1.0 / math.sqrt(D_K)
 
+        if B == 0 or H == 0 or S == 0 or D_V == 0:
+            output = torch.empty(
+                (B, H, S, D_V),
+                dtype=query.dtype,
+                device=query.device,
+            )
+            ctx.save_for_backward(query, key, value, output)
+            ctx.scale = scale
+            return output
+
         pipeline = _get_sdpa_pipeline()
         ext = _ext()
 
-        if pipeline is not None and ext is not None and S <= 256:
+        if (
+            pipeline is not None
+            and ext is not None
+            and query.dtype == torch.float32
+            and S <= 256
+            and D_V <= 256
+        ):
             # Use fused kernel.
             # Reshape to (B*H, S, D) for the shader.
             q_flat = query.contiguous().view(B * H, S, D_K)
@@ -111,7 +126,6 @@ class FusedSDPA(torch.autograd.Function):
         output = torch.matmul(attn_weights, value)
         ctx.save_for_backward(query, key, value, output)
         ctx.scale = scale
-        ctx.attn_weights = attn_weights
         return output
 
     @staticmethod
@@ -130,7 +144,7 @@ class FusedSDPA(torch.autograd.Function):
         # grad_attn = grad_output @ value^T
         grad_attn = torch.matmul(grad_output, value.transpose(-2, -1))
 
-        # Softmax backward: grad_scores = attn * (grad_attn - sum(grad_attn * attn, dim=-1, keepdim=True))
+        # Apply the softmax Jacobian without materializing it.
         dot = (grad_attn * attn_weights).sum(dim=-1, keepdim=True)
         grad_scores = attn_weights * (grad_attn - dot) * scale
 
@@ -143,12 +157,19 @@ class FusedSDPA(torch.autograd.Function):
         return grad_query, grad_key, grad_value, None
 
 
-def vulkan_sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):
+def vulkan_sdpa(
+    query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None
+):
     """Drop-in replacement for F.scaled_dot_product_attention using fused Vulkan kernel."""
     if attn_mask is not None or dropout_p > 0.0 or is_causal:
-        # Fall back to PyTorch's implementation for masked/causal/dropout attention.
         return F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attn_mask,
-            dropout_p=dropout_p, is_causal=is_causal, scale=scale)
+            query,
+            key,
+            value,
+            attn_mask=attn_mask,
+            dropout_p=dropout_p,
+            is_causal=is_causal,
+            scale=scale,
+        )
 
     return FusedSDPA.apply(query, key, value, scale)

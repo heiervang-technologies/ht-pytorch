@@ -5,13 +5,15 @@ for memory-efficient attention. Forward and backward are fused Vulkan
 compute shaders that avoid materializing the N*N attention matrix.
 """
 
+import logging
 import math
 import struct
-import torch
-import logging
-from typing import Optional
 
-from pytorch_vulkan.device import load_shader_bytes
+import torch
+
+from pytorch_vulkan.device import device_info, load_shader, shader_is_live
+from pytorch_vulkan.operator_registry import shader_variant
+
 
 log = logging.getLogger(__name__)
 
@@ -22,50 +24,62 @@ _fa_bwd_pipeline = None
 _fa_bwd_f16_pipeline = None
 
 TILE_Q = 32
+_MAX_SHADER_INDEX = (1 << 32) - 1
+_MAX_SHADER_FLOAT = 3.4028235e38
+
+
+def _fits_shader_launch(*values):
+    return all(0 <= int(value) <= _MAX_SHADER_INDEX for value in values)
+
+
+def _fits_shader_scale(scale):
+    return not math.isfinite(scale) or abs(scale) <= _MAX_SHADER_FLOAT
 
 
 def _ext():
     try:
         from pytorch_vulkan import _C
+
         return _C
     except ImportError:
         return None
 
 
 def _get_fa_pipelines():
-    """Lazily compile and cache FA2 pipelines."""
-    global _fa_fwd_pipeline, _fa_fwd_f16_pipeline, _fa_bwd_pipeline, _fa_bwd_f16_pipeline
+    """Lazily load and cache packaged FA2 pipelines."""
+    global \
+        _fa_fwd_pipeline, \
+        _fa_fwd_f16_pipeline, \
+        _fa_bwd_pipeline, \
+        _fa_bwd_f16_pipeline
 
-    if _fa_fwd_pipeline is not None and _fa_fwd_f16_pipeline is not None and _fa_bwd_pipeline is not None and _fa_bwd_f16_pipeline is not None:
-        return _fa_fwd_pipeline, _fa_fwd_f16_pipeline, _fa_bwd_pipeline, _fa_bwd_f16_pipeline
-
-    ext = _ext()
-    if ext is None:
-        return None, None, None, None
-
-    from pytorch_vulkan.inductor_backend import compile_glsl_to_spirv, SHADER_DIR
-
-    for name, attr in [("flash_attn_fwd_v2.comp", "_fa_fwd_pipeline"),
-                       ("flash_attn_fwd_v2_f16.comp", "_fa_fwd_f16_pipeline"),
-                       ("flash_attn_bwd.comp", "_fa_bwd_pipeline"),
-                       ("flash_attn_bwd_f16.comp", "_fa_bwd_f16_pipeline")]:
-        path = SHADER_DIR / name
-        if not path.exists():
-            log.warning("FA2 shader not found: %s", path)
-            return None, None, None, None
-        spirv = compile_glsl_to_spirv(path.read_text())
-        handle = load_shader_bytes(ext, spirv)
-        if handle == 0:
-            log.error("Failed to load FA2 pipeline: %s", name)
-            return None, None, None, None
-        globals()[attr] = handle
-        log.info("Loaded FA2 pipeline %s (handle=%d)", name, handle)
-
-    _fa_fwd_pipeline = globals()["_fa_fwd_pipeline"]
-    _fa_fwd_f16_pipeline = globals()["_fa_fwd_f16_pipeline"]
-    _fa_bwd_pipeline = globals()["_fa_bwd_pipeline"]
-    _fa_bwd_f16_pipeline = globals()["_fa_bwd_f16_pipeline"]
-    return _fa_fwd_pipeline, _fa_fwd_f16_pipeline, _fa_bwd_pipeline, _fa_bwd_f16_pipeline
+    capabilities = device_info()["capabilities"]
+    if not shader_is_live(_fa_fwd_pipeline):
+        _fa_fwd_pipeline = load_shader(
+            shader_variant("flash_attention_forward", "float32"),
+            capabilities,
+        )
+    if not shader_is_live(_fa_fwd_f16_pipeline):
+        _fa_fwd_f16_pipeline = load_shader(
+            shader_variant("flash_attention_forward", "float16"),
+            capabilities,
+        )
+    if not shader_is_live(_fa_bwd_pipeline):
+        _fa_bwd_pipeline = load_shader(
+            shader_variant("flash_attention_backward", "float32"),
+            capabilities,
+        )
+    if not shader_is_live(_fa_bwd_f16_pipeline):
+        _fa_bwd_f16_pipeline = load_shader(
+            shader_variant("flash_attention_backward", "float16"),
+            capabilities,
+        )
+    return (
+        _fa_fwd_pipeline,
+        _fa_fwd_f16_pipeline,
+        _fa_bwd_pipeline,
+        _fa_bwd_f16_pipeline,
+    )
 
 
 class FlashAttentionVulkan(torch.autograd.Function):
@@ -84,34 +98,92 @@ class FlashAttentionVulkan(torch.autograd.Function):
             value: (B, H, S, D_v)
             scale: float, defaults to 1/sqrt(D_k)
         """
+        if query.ndim != 4 or key.ndim != 4 or value.ndim != 4:
+            raise ValueError("Flash Attention requires rank-4 tensors")
+        if query.device != key.device or query.device != value.device:
+            raise ValueError("Flash Attention tensors must use the same device")
+        if query.dtype != key.dtype or query.dtype != value.dtype:
+            raise ValueError("Flash Attention tensors must use the same dtype")
+        if query.dtype not in {
+            torch.float16,
+            torch.bfloat16,
+            torch.float32,
+        }:
+            raise ValueError("Flash Attention requires a floating-point dtype")
         B, H, S, D_K = query.shape
         D_V = value.shape[-1]
+        if key.shape != query.shape:
+            raise ValueError("Flash Attention requires query and key shapes to match")
+        if value.shape[:3] != query.shape[:3]:
+            raise ValueError(
+                "Flash Attention requires matching batch, head, and sequence dimensions"
+            )
+        if D_K == 0:
+            raise ValueError("Flash Attention requires a non-empty query head")
 
         if scale is None:
             scale = 1.0 / math.sqrt(D_K)
 
-        fwd_pipeline, fwd_f16_pipeline, bwd_pipeline, bwd_f16_pipeline = _get_fa_pipelines()
-        ext = _ext()
+        if B == 0 or H == 0 or S == 0 or D_V == 0:
+            output = torch.empty(
+                (B, H, S, D_V),
+                dtype=query.dtype,
+                device=query.device,
+            )
+            ctx.save_for_backward(query, key, value, output)
+            ctx.scale = scale
+            ctx.bwd_pipeline = None
+            return output
 
-        if fwd_pipeline is not None and ext is not None:
+        fwd_pipeline, fwd_f16_pipeline, bwd_pipeline, bwd_f16_pipeline = (
+            _get_fa_pipelines()
+        )
+        ext = _ext()
+        selected_pipeline = (
+            fwd_f16_pipeline if query.dtype == torch.float16 else fwd_pipeline
+        )
+
+        if (
+            selected_pipeline is not None
+            and ext is not None
+            and D_K <= 64
+            and D_V <= 64
+            and _fits_shader_scale(scale)
+            and _fits_shader_launch(
+                B,
+                H,
+                S,
+                D_K,
+                D_V,
+                B * H,
+                B * H * S * D_K,
+                B * H * S * D_V,
+            )
+        ):
             orig_dtype = query.dtype
-            
-            if orig_dtype == torch.float16 and fwd_f16_pipeline is not None:
+
+            if orig_dtype == torch.float16:
                 q_flat = query.contiguous().view(B * H, S, D_K).contiguous()
                 k_flat = key.contiguous().view(B * H, S, D_K).contiguous()
                 v_flat = value.contiguous().view(B * H, S, D_V).contiguous()
-                output = torch.empty(B * H, S, D_V, dtype=torch.float16, device=query.device)
+                output = torch.empty(
+                    B * H, S, D_V, dtype=torch.float16, device=query.device
+                )
                 lse = torch.empty(B * H, S, dtype=torch.float32, device=query.device)
-                pipeline_to_use = fwd_f16_pipeline
+                pipeline_to_use = selected_pipeline
                 ctx.bwd_pipeline = bwd_f16_pipeline
+                ctx.pipeline_dtype = torch.float16
             else:
                 q_flat = query.contiguous().float().view(B * H, S, D_K).contiguous()
                 k_flat = key.contiguous().float().view(B * H, S, D_K).contiguous()
                 v_flat = value.contiguous().float().view(B * H, S, D_V).contiguous()
-                output = torch.empty(B * H, S, D_V, dtype=torch.float32, device=query.device)
+                output = torch.empty(
+                    B * H, S, D_V, dtype=torch.float32, device=query.device
+                )
                 lse = torch.empty(B * H, S, dtype=torch.float32, device=query.device)
-                pipeline_to_use = fwd_pipeline
+                pipeline_to_use = selected_pipeline
                 ctx.bwd_pipeline = bwd_pipeline
+                ctx.pipeline_dtype = torch.float32
 
             push_data = struct.pack("<IIIf", S, D_K, D_V, scale)
             groups_x = (S + TILE_Q - 1) // TILE_Q
@@ -124,10 +196,10 @@ class FlashAttentionVulkan(torch.autograd.Function):
             )
 
             if success:
-                output = output.view(B, H, S, D_V).to(orig_dtype)
+                compute_output = output.view(B, H, S, D_V)
+                output = compute_output.to(orig_dtype)
                 lse = lse.view(B, H, S)
-                ctx.save_for_backward(query, key, value, output, lse)
-                ctx.orig_dtype = orig_dtype
+                ctx.save_for_backward(query, key, value, compute_output, lse)
                 ctx.scale = scale
                 return output
 
@@ -139,7 +211,6 @@ class FlashAttentionVulkan(torch.autograd.Function):
         ctx.save_for_backward(query, key, value, output)
         ctx.scale = scale
         ctx.bwd_pipeline = None
-        ctx.lse = None
         return output
 
     @staticmethod
@@ -147,16 +218,17 @@ class FlashAttentionVulkan(torch.autograd.Function):
         scale = ctx.scale
         ext = _ext()
 
-        # GPU backward via FA2 shader is validated. 
-        # C++ shim supports 16 bindings and async zero-initialization.
-        use_gpu_backward = True
-        if use_gpu_backward and ctx.bwd_pipeline is not None and ext is not None and len(ctx.saved_tensors) == 5:
+        if (
+            ctx.bwd_pipeline is not None
+            and ext is not None
+            and len(ctx.saved_tensors) == 5
+        ):
             # Use fused FA2 backward shader.
             query, key, value, output, lse = ctx.saved_tensors
             B, H, S, D_K = query.shape
             D_V = value.shape[-1]
 
-            if query.dtype == torch.float16:
+            if ctx.pipeline_dtype == torch.float16:
                 q_flat = query.contiguous().view(B * H, S, D_K).contiguous()
                 k_flat = key.contiguous().view(B * H, S, D_K).contiguous()
                 v_flat = value.contiguous().view(B * H, S, D_V).contiguous()
@@ -164,17 +236,21 @@ class FlashAttentionVulkan(torch.autograd.Function):
                 do_flat = grad_output.contiguous().view(B * H, S, D_V).contiguous()
                 lse_flat = lse.contiguous().view(B * H, S).contiguous()
 
-                # f16 atomic adds might be unsupported, but we can safely allocate dQ, dK, dV in f32
-                # and return them cast to f16. The shader handles the accumulation safely.
-                dq = torch.zeros(B * H, S, D_K, dtype=torch.float32, device=query.device)
-                dk = torch.zeros(B * H, S, D_K, dtype=torch.float32, device=query.device)
-                dv = torch.zeros(B * H, S, D_V, dtype=torch.float32, device=query.device)
+                dq = torch.zeros(
+                    B * H, S, D_K, dtype=torch.float32, device=query.device
+                )
+                dk = torch.zeros(
+                    B * H, S, D_K, dtype=torch.float32, device=query.device
+                )
+                dv = torch.zeros(
+                    B * H, S, D_V, dtype=torch.float32, device=query.device
+                )
             else:
-                q_flat = query.contiguous().view(B * H, S, D_K).contiguous()
-                k_flat = key.contiguous().view(B * H, S, D_K).contiguous()
-                v_flat = value.contiguous().view(B * H, S, D_V).contiguous()
-                o_flat = output.contiguous().view(B * H, S, D_V).contiguous()
-                do_flat = grad_output.contiguous().view(B * H, S, D_V).contiguous()
+                q_flat = query.float().contiguous().view(B * H, S, D_K)
+                k_flat = key.float().contiguous().view(B * H, S, D_K)
+                v_flat = value.float().contiguous().view(B * H, S, D_V)
+                o_flat = output.float().contiguous().view(B * H, S, D_V)
+                do_flat = grad_output.float().contiguous().view(B * H, S, D_V)
                 lse_flat = lse.contiguous().view(B * H, S).contiguous()
 
                 dq = torch.zeros_like(q_flat)
@@ -192,40 +268,32 @@ class FlashAttentionVulkan(torch.autograd.Function):
             )
 
             if success:
-                if query.dtype == torch.float16:
-                    dq = dq.to(torch.float16)
-                    dk = dk.to(torch.float16)
-                    dv = dv.to(torch.float16)
                 return (
-                    dq.view(B, H, S, D_K),
-                    dk.view(B, H, S, D_K),
-                    dv.view(B, H, S, D_V),
+                    dq.view(B, H, S, D_K).to(query.dtype),
+                    dk.view(B, H, S, D_K).to(key.dtype),
+                    dv.view(B, H, S, D_V).to(value.dtype),
                     None,
                 )
 
-        # Fallback: decomposed backward on CPU.
-        log.debug("FA2 backward fallback to CPU")
+        # Fallback: decomposed backward on the input device.
+        log.debug("FA2 backward using decomposed device operations")
         if len(ctx.saved_tensors) == 5:
             query, key, value, output, lse = ctx.saved_tensors
         else:
             query, key, value, output = ctx.saved_tensors
 
-        q, k, v = query.to("cpu"), key.to("cpu"), value.to("cpu")
-        go = grad_output.to("cpu")
-        device = grad_output.device
-
-        attn = torch.matmul(q, k.transpose(-2, -1)) * scale
+        attn = torch.matmul(query, key.transpose(-2, -1)) * scale
         attn = torch.softmax(attn, dim=-1)
 
-        gv = torch.matmul(attn.transpose(-2, -1), go)
-        ga = torch.matmul(go, v.transpose(-2, -1))
+        gv = torch.matmul(attn.transpose(-2, -1), grad_output)
+        ga = torch.matmul(grad_output, value.transpose(-2, -1))
         dot = (ga * attn).sum(dim=-1, keepdim=True)
         gs = attn * (ga - dot) * scale
 
-        gq = torch.matmul(gs, k)
-        gk = torch.matmul(gs.transpose(-2, -1), q)
+        gq = torch.matmul(gs, key)
+        gk = torch.matmul(gs.transpose(-2, -1), query)
 
-        return gq.to(device), gk.to(device), gv.to(device), None
+        return gq, gk, gv, None
 
 
 def flash_attention_vulkan(query, key, value, scale=None):
@@ -238,26 +306,14 @@ def flash_attention_vulkan(query, key, value, scale=None):
 
 
 def _get_kvcache_pipeline():
-    """Lazily compile the KV-cache flash attention shader."""
+    """Lazily load the packaged KV-cache flash attention shader."""
     global _fa_kvcache_f16_pipeline
-    if _fa_kvcache_f16_pipeline is not None:
+    if shader_is_live(_fa_kvcache_f16_pipeline):
         return _fa_kvcache_f16_pipeline
-
-    ext = _ext()
-    if ext is None:
-        return None
-
-    from pytorch_vulkan.inductor_backend import compile_glsl_to_spirv, SHADER_DIR
-    path = SHADER_DIR / "flash_attn_fwd_v2_kvcache_f16.comp"
-    if not path.exists():
-        return None
-    spirv = compile_glsl_to_spirv(path.read_text())
-    handle = load_shader_bytes(ext, spirv)
-    if handle == 0:
-        return None
-    _fa_kvcache_f16_pipeline = handle
-    log.info("Loaded FA2 KV-cache pipeline (handle=%d)", handle)
-    return handle
+    _fa_kvcache_f16_pipeline = load_shader(
+        shader_variant("flash_attention_kvcache", "float16")
+    )
+    return _fa_kvcache_f16_pipeline
 
 
 def flash_attention_kvcache(query, key, value, scale=None):
@@ -275,9 +331,39 @@ def flash_attention_kvcache(query, key, value, scale=None):
     Returns:
         output: (B, H, q_len, D)
     """
+    if query.ndim != 4 or key.ndim != 4 or value.ndim != 4:
+        raise ValueError("KV-cache attention requires rank-4 tensors")
+    if query.device != key.device or query.device != value.device:
+        raise ValueError("KV-cache attention tensors must use the same device")
+    if query.dtype != key.dtype or query.dtype != value.dtype:
+        raise ValueError("KV-cache attention tensors must use the same dtype")
+    if query.dtype not in {
+        torch.float16,
+        torch.bfloat16,
+        torch.float32,
+    }:
+        raise ValueError("KV-cache attention requires a floating-point dtype")
     B, H, Q_S, D_K = query.shape
     KV_S = key.shape[2]
     D_V = value.shape[-1]
+    if key.shape[:2] != query.shape[:2] or key.shape[-1] != D_K:
+        raise ValueError("KV-cache key shape is incompatible with query")
+    if value.shape[:3] != key.shape[:3]:
+        raise ValueError("KV-cache value shape is incompatible with key")
+    if D_K == 0:
+        raise ValueError("KV-cache attention requires a non-empty query head")
+    if B == 0 or H == 0 or Q_S == 0 or D_V == 0:
+        return torch.empty(
+            (B, H, Q_S, D_V),
+            dtype=query.dtype,
+            device=query.device,
+        )
+    if KV_S == 0:
+        return torch.zeros(
+            (B, H, Q_S, D_V),
+            dtype=query.dtype,
+            device=query.device,
+        )
 
     if scale is None:
         scale = 1.0 / math.sqrt(D_K)
@@ -285,7 +371,27 @@ def flash_attention_kvcache(query, key, value, scale=None):
     pipeline = _get_kvcache_pipeline()
     ext = _ext()
 
-    if pipeline is not None and ext is not None and query.dtype == torch.float16:
+    if (
+        pipeline is not None
+        and ext is not None
+        and query.dtype == torch.float16
+        and D_K <= 64
+        and D_V <= 64
+        and _fits_shader_scale(scale)
+        and _fits_shader_launch(
+            B,
+            H,
+            Q_S,
+            KV_S,
+            D_K,
+            D_V,
+            B * H,
+            B * H * Q_S * D_K,
+            B * H * KV_S * D_K,
+            B * H * KV_S * D_V,
+            B * H * Q_S * D_V,
+        )
+    ):
         q_flat = query.contiguous().view(B * H, Q_S, D_K).contiguous()
         k_flat = key.contiguous().view(B * H, KV_S, D_K).contiguous()
         v_flat = value.contiguous().view(B * H, KV_S, D_V).contiguous()

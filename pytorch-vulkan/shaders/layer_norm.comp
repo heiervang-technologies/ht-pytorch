@@ -6,12 +6,15 @@ layout(set = 0, binding = 0) readonly buffer InputA { float A[]; };
 layout(set = 0, binding = 1) readonly buffer Weight { float W[]; };
 layout(set = 0, binding = 2) readonly buffer Bias   { float B[]; };
 layout(set = 0, binding = 3) writeonly buffer OutputC { float C[]; };
+layout(set = 0, binding = 4) writeonly buffer Mean { float mean_data[]; };
+layout(set = 0, binding = 5) writeonly buffer Rstd { float rstd_data[]; };
 
 layout(push_constant) uniform PushConstants {
     uint outer_size;
     uint dim_size;
     float eps;
-    uint has_weight_bias;
+    uint has_weight;
+    uint has_bias;
 } pc;
 
 shared float s_sum[32];
@@ -29,13 +32,13 @@ void main() {
     // 1. Compute local sum and sum of squares
     float local_sum = 0.0;
     float local_sum_sq = 0.0;
-    
+
     for (uint i = tid; i < pc.dim_size; i += gl_WorkGroupSize.x) {
         float val = A[base_idx + i];
         local_sum += val;
         local_sum_sq += val * val;
     }
-    
+
     s_sum[tid] = local_sum;
     s_sum_sq[tid] = local_sum_sq;
     barrier();
@@ -53,7 +56,7 @@ void main() {
         float mean = s_sum[0] / float(pc.dim_size);
         float variance = (s_sum_sq[0] / float(pc.dim_size)) - (mean * mean);
         if (variance < 0.0) variance = 0.0;
-        
+
         s_mean = mean;
         s_var = variance;
     }
@@ -62,15 +65,22 @@ void main() {
     // 3. Normalize and apply weight/bias
     float mean = s_mean;
     float inv_std = inversesqrt(s_var + pc.eps);
+    if (tid == 0) {
+        mean_data[row] = mean;
+        rstd_data[row] = inv_std;
+    }
 
     for (uint i = tid; i < pc.dim_size; i += gl_WorkGroupSize.x) {
         float val = A[base_idx + i];
         float norm_val = (val - mean) * inv_std;
-        
-        if (pc.has_weight_bias == 1) {
-            norm_val = norm_val * W[i] + B[i];
+
+        if (pc.has_weight == 1) {
+            norm_val *= W[i];
         }
-        
+        if (pc.has_bias == 1) {
+            norm_val += B[i];
+        }
+
         C[base_idx + i] = norm_val;
     }
 }

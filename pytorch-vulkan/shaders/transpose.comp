@@ -28,7 +28,7 @@ void main() {
     if (x < pc.N && y < pc.M) {
         tile[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = A[y * pc.N + x];
     }
-    
+
     barrier();
 
     // Calculate transposed coordinates
