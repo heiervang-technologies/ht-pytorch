@@ -256,6 +256,18 @@ TORCH_LIBRARY(vulkan_prepack, m) {
       "Tensor input_vk, "
       "__torch__.torch.classes.vulkan.BatchNormPackedContext context) "
       "-> Tensor out"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_prepack::rms_norm(Tensor X, Tensor W) -> Tensor Y"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_prepack::rotary_embedding(Tensor X, Tensor cos, Tensor sin) -> Tensor Y"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_prepack::layer_norm(Tensor X, Tensor W, Tensor B) -> Tensor Y"));
+  m.def(
+      TORCH_SELECTIVE_SCHEMA("vulkan_prepack::silu_mul(Tensor X) -> Tensor Y"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_prepack::attn_score(Tensor Q, Tensor K, float scale, int n_heads, int n_kv_heads) -> Tensor Y"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_prepack::attn_value(Tensor attn, Tensor V, int n_heads, int n_kv_heads) -> Tensor Y"));
 }
 
 TORCH_LIBRARY_IMPL(vulkan_prepack, CPU, m) {
@@ -334,26 +346,26 @@ TORCH_LIBRARY_IMPL(vulkan_prepack, Vulkan, m) {
 }
 
 TORCH_LIBRARY(vulkan_quantized, m) {
-  m.def(
-      TORCH_SELECTIVE_SCHEMA("vulkan_quantized::add(Tensor qa, "
-                             "Tensor qb, "
-                             "float scale, "
-                             "int zero_point) -> Tensor qc"));
-  m.def(
-      TORCH_SELECTIVE_SCHEMA("vulkan_quantized::sub(Tensor qa, "
-                             "Tensor qb, "
-                             "float scale, "
-                             "int zero_point)-> Tensor qc"));
-  m.def(
-      TORCH_SELECTIVE_SCHEMA("vulkan_quantized::mul(Tensor qa, "
-                             "Tensor qb, "
-                             "float scale, "
-                             "int zero_point)-> Tensor qc"));
-  m.def(
-      TORCH_SELECTIVE_SCHEMA("vulkan_quantized::div(Tensor qa, "
-                             "Tensor qb, "
-                             "float scale, "
-                             "int zero_point)-> Tensor qc"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_quantized::add(Tensor qa, "
+      "Tensor qb, "
+      "float scale, "
+      "int zero_point) -> Tensor qc"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_quantized::sub(Tensor qa, "
+      "Tensor qb, "
+      "float scale, "
+      "int zero_point)-> Tensor qc"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_quantized::mul(Tensor qa, "
+      "Tensor qb, "
+      "float scale, "
+      "int zero_point)-> Tensor qc"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_quantized::div(Tensor qa, "
+      "Tensor qb, "
+      "float scale, "
+      "int zero_point)-> Tensor qc"));
 }
 
 TORCH_LIBRARY_IMPL(vulkan_quantized, Vulkan, m) {
