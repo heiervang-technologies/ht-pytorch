@@ -4,12 +4,13 @@ Run with: python benchmarks/bench_comprehensive.py
 For AMD iGPU: VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json python benchmarks/bench_comprehensive.py --igpu
 """
 
+import os
 import sys
 import time
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import os
 
 
 def bench(name, fn, warmup=5, iters=50):
@@ -60,7 +61,9 @@ def run_suite(device_name, device):
     # 4. Softmax
     try:
         x = torch.randn(32, 256, device=device)
-        results["softmax_32x256"] = bench("softmax(32x256)", lambda: F.softmax(x, dim=-1))
+        results["softmax_32x256"] = bench(
+            "softmax(32x256)", lambda: F.softmax(x, dim=-1)
+        )
     except Exception as e:
         results["softmax_32x256"] = f"FAIL"
 
@@ -72,9 +75,14 @@ def run_suite(device_name, device):
         v = torch.randn(B, H, S, D, device=device)
         if device_name.startswith("Vulkan"):
             from pytorch_vulkan import vulkan_sdpa
-            results["sdpa_4x8x64"] = bench("sdpa(4,8,64,64)", lambda: vulkan_sdpa(q, k, v))
+
+            results["sdpa_4x8x64"] = bench(
+                "sdpa(4,8,64,64)", lambda: vulkan_sdpa(q, k, v)
+            )
         else:
-            results["sdpa_4x8x64"] = bench("sdpa(4,8,64,64)", lambda: F.scaled_dot_product_attention(q, k, v))
+            results["sdpa_4x8x64"] = bench(
+                "sdpa(4,8,64,64)", lambda: F.scaled_dot_product_attention(q, k, v)
+            )
     except Exception as e:
         results["sdpa_4x8x64"] = f"FAIL"
 
@@ -86,9 +94,14 @@ def run_suite(device_name, device):
         v = torch.randn(B, H, S, D, device=device)
         if device_name.startswith("Vulkan"):
             from pytorch_vulkan import flash_attention_vulkan
-            results["fa2_2x4x32"] = bench("FA2(2,4,32,32)", lambda: flash_attention_vulkan(q, k, v))
+
+            results["fa2_2x4x32"] = bench(
+                "FA2(2,4,32,32)", lambda: flash_attention_vulkan(q, k, v)
+            )
         else:
-            results["fa2_2x4x32"] = bench("FA2(2,4,32,32)", lambda: F.scaled_dot_product_attention(q, k, v))
+            results["fa2_2x4x32"] = bench(
+                "FA2(2,4,32,32)", lambda: F.scaled_dot_product_attention(q, k, v)
+            )
     except Exception as e:
         results["fa2_2x4x32"] = f"FAIL"
 
@@ -109,8 +122,8 @@ def run_suite(device_name, device):
     # 9. Transformer Encoder Layer (forward only)
     try:
         layer = nn.TransformerEncoderLayer(
-            d_model=128, nhead=4, dim_feedforward=256,
-            dropout=0.0, batch_first=True).to(device)
+            d_model=128, nhead=4, dim_feedforward=256, dropout=0.0, batch_first=True
+        ).to(device)
         x = torch.randn(4, 32, 128, device=device)
         results["encoder_4x32x128"] = bench("encoder(4,32,128)", lambda: layer(x))
     except Exception as e:
@@ -118,7 +131,9 @@ def run_suite(device_name, device):
 
     # 10. MLP training step
     try:
-        model = nn.Sequential(nn.Linear(64, 256), nn.ReLU(), nn.Linear(256, 64)).to(device)
+        model = nn.Sequential(nn.Linear(64, 256), nn.ReLU(), nn.Linear(256, 64)).to(
+            device
+        )
         opt = torch.optim.SGD(model.parameters(), lr=0.01)
         x = torch.randn(16, 64, device=device)
 
@@ -138,6 +153,7 @@ def run_suite(device_name, device):
 
 def main():
     from pytorch_vulkan import init
+
     init()
 
     igpu_mode = "--igpu" in sys.argv
@@ -145,6 +161,7 @@ def main():
 
     # Determine which Vulkan GPU
     from pytorch_vulkan import device_name
+
     vk_name = device_name()
     is_igpu = "AMD" in vk_name or "Raphael" in vk_name or "RADV" in vk_name
 

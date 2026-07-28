@@ -7,6 +7,7 @@ import torch
 def requires_vulkan(fn):
     try:
         from pytorch_vulkan import init, is_available
+
         init()
         available = is_available()
     except ImportError:
@@ -21,9 +22,11 @@ def vk(t):
 def _flush():
     try:
         from pytorch_vulkan import _C
+
         _C.flush()
     except Exception:
         pass
+
 
 def assert_close(a, b, atol=1e-4):
     _flush()
@@ -89,6 +92,7 @@ class TestThresholdBackward:
 
         y_cpu.sum().backward()
         from pytorch_vulkan import _C
+
         _C.flush()
         y_vk.sum().backward()
         _C.flush()

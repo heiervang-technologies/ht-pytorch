@@ -8,18 +8,19 @@ Tolerances are set per-op based on expected floating point behavior.
 import pytest
 import torch
 import torch.nn.functional as F
-import math
 
 
 @pytest.fixture(autouse=True)
 def init_vulkan():
     from pytorch_vulkan import init
+
     init()
 
 
 @pytest.fixture(autouse=True)
 def register_backend():
     from pytorch_vulkan import register
+
     register()
 
 
@@ -44,6 +45,7 @@ def assert_close(result, expected, atol=1e-5, rtol=1e-5):
 # =========================================================================
 # Tensor lifecycle ops
 # =========================================================================
+
 
 class TestTensorLifecycle:
     def test_empty_creates_correct_shape(self):
@@ -98,15 +100,19 @@ class TestTensorLifecycle:
 # View / reshape ops
 # =========================================================================
 
+
 class TestViewReshape:
-    @pytest.mark.parametrize("src,dst", [
-        ((4, 16, 256), (-1, 256)),
-        ((4, 16, 256), (64, 256)),
-        ((8, 32), (-1,)),
-        ((2, 3, 4), (6, 4)),
-        ((2, 3, 4, 5), (2, 3, 20)),
-        ((2, 3, 4, 5), (6, 20)),
-    ])
+    @pytest.mark.parametrize(
+        "src,dst",
+        [
+            ((4, 16, 256), (-1, 256)),
+            ((4, 16, 256), (64, 256)),
+            ((8, 32), (-1,)),
+            ((2, 3, 4), (6, 4)),
+            ((2, 3, 4, 5), (2, 3, 20)),
+            ((2, 3, 4, 5), (6, 20)),
+        ],
+    )
     def test_view_shapes(self, src, dst):
         cpu = torch.randn(*src)
         result = vk(cpu).view(*dst)
@@ -123,6 +129,7 @@ class TestViewReshape:
 # =========================================================================
 # Pointwise binary ops
 # =========================================================================
+
 
 class TestPointwiseBinary:
     @pytest.mark.parametrize("shape", [(64,), (8, 16), (4, 8, 16)])
@@ -159,6 +166,7 @@ class TestPointwiseBinary:
 # =========================================================================
 # Pointwise unary ops
 # =========================================================================
+
 
 class TestPointwiseUnary:
     @pytest.mark.parametrize("shape", [(128,), (8, 16)])
@@ -246,6 +254,7 @@ class TestPointwiseUnary:
 # Reductions
 # =========================================================================
 
+
 class TestReductions:
     def test_sum_scalar(self):
         a = torch.randn(1024)
@@ -301,6 +310,7 @@ class TestReductions:
 # Matmul
 # =========================================================================
 
+
 class TestMatmul:
     @pytest.mark.parametrize("m,k,n", [(4, 8, 4), (16, 32, 16), (32, 64, 32)])
     def test_mm(self, m, k, n):
@@ -326,6 +336,7 @@ class TestMatmul:
 # =========================================================================
 # Softmax
 # =========================================================================
+
 
 class TestSoftmax:
     @pytest.mark.parametrize("shape", [(4, 8), (8, 32), (2, 4, 16)])
@@ -368,6 +379,7 @@ class TestSoftmax:
 # =========================================================================
 # SDPA
 # =========================================================================
+
 
 class TestSDPA:
     def test_sdpa_correctness(self):
@@ -432,6 +444,7 @@ class TestSDPA:
 # Float16
 # =========================================================================
 
+
 class TestFloat16:
     def test_f16_roundtrip(self):
         cpu = torch.randn(64).half()
@@ -460,9 +473,11 @@ class TestFloat16:
 # Embedding
 # =========================================================================
 
+
 class TestEmbedding:
     def test_embedding_correctness(self):
         import torch.nn as nn
+
         embed_cpu = nn.Embedding(100, 32)
         embed_vk = nn.Embedding(100, 32).to("vkgpu:0")
         # Copy weights
@@ -477,6 +492,7 @@ class TestEmbedding:
 # =========================================================================
 # Backward ops
 # =========================================================================
+
 
 class TestBackwardOps:
     def test_threshold_backward(self):

@@ -8,6 +8,7 @@ import torch.nn.functional as F
 def requires_vulkan(fn):
     try:
         from pytorch_vulkan import init, is_available
+
         init()
         available = is_available()
     except ImportError:
@@ -22,8 +23,12 @@ def test_kv_cache_basic():
     from pytorch_vulkan.kv_cache import KVCache
 
     cache = KVCache(
-        batch_size=1, num_heads=4, max_seq_len=32,
-        head_dim=16, dtype=torch.float16, device=torch.device("vkgpu:0"),
+        batch_size=1,
+        num_heads=4,
+        max_seq_len=32,
+        head_dim=16,
+        dtype=torch.float16,
+        device=torch.device("vkgpu:0"),
     )
     _C.flush()
 
@@ -49,11 +54,14 @@ def test_kv_cache_basic():
 
     # Verify first token is still there
     torch.testing.assert_close(
-        k_full2[:, :, 0:1, :].to("cpu"), k1.to("cpu"), atol=1e-4, rtol=1e-3)
+        k_full2[:, :, 0:1, :].to("cpu"), k1.to("cpu"), atol=1e-4, rtol=1e-3
+    )
 
 
 @requires_vulkan
-@pytest.mark.skip(reason="f16 SDPA with asymmetric Q(1xD) K(NxD) overflows - needs f32 accumulation")
+@pytest.mark.skip(
+    reason="f16 SDPA with asymmetric Q(1xD) K(NxD) overflows - needs f32 accumulation"
+)
 def test_kv_cache_attention():
     """Test that attention with KV-cache matches full recomputation."""
     from pytorch_vulkan import _C
@@ -80,8 +88,7 @@ def test_kv_cache_attention():
     _C.flush()
 
     # Process 4th token with cache
-    k_cached, v_cached = cache.update(
-        k_full[:, :, 3:4, :], v_full[:, :, 3:4, :])
+    k_cached, v_cached = cache.update(k_full[:, :, 3:4, :], v_full[:, :, 3:4, :])
     _C.flush()
 
     # Attention for last token only, using full cached K/V
@@ -108,9 +115,13 @@ def test_layer_kv_cache():
     from pytorch_vulkan.kv_cache import LayerKVCache
 
     cache = LayerKVCache(
-        num_layers=2, batch_size=1, num_heads=4,
-        max_seq_len=32, head_dim=16,
-        dtype=torch.float16, device=torch.device("vkgpu:0"),
+        num_layers=2,
+        batch_size=1,
+        num_heads=4,
+        max_seq_len=32,
+        head_dim=16,
+        dtype=torch.float16,
+        device=torch.device("vkgpu:0"),
     )
     _C.flush()
 
