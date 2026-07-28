@@ -52,7 +52,7 @@ For each block of queries Q_i:
 ### Tile Sizes
 - TILE_Q = 32 (queries per tile)
 - TILE_K = 32 (keys per tile)
-- Head dim D = up to 128 (fits in registers/shared memory)
+- Head dim D = up to 64 (the enforced shader limit)
 - Workgroup size: (TILE_Q, 1, 1) = 32 threads
 
 ### Shared Memory Layout
@@ -66,7 +66,7 @@ shared float s_m[TILE_Q];         // running max
 shared float s_l[TILE_Q];         // running sum
 ```
 
-### Forward Shader (flash_attn_fwd.comp)
+### Forward Shader (flash_attn_fwd_v2.comp)
 - Dispatch: (ceil(seq_len/TILE_Q), batch*heads, 1) workgroups
 - Each workgroup processes TILE_Q query rows
 - Inner loop over K/V tiles
