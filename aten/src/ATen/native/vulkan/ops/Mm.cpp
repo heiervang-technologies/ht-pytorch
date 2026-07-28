@@ -712,36 +712,52 @@ Tensor run_addmm_context(
       safe_downcast<uint32_t>(step_size),
   };
   params = api::UniformParamsBuffer(context, block_no_bias);
-  compute_shader = VK_KERNEL(mm);
+
+  const bool use_matvec = input_arg_2d.sizes()[Layout::Parameter::height] == 1;
+  compute_shader = use_matvec ? VK_KERNEL(matvec) : VK_KERNEL(mm);
 
   api::PipelineBarrier pipeline_barrier{};
 
-  context->submit_compute_job(
-      // shader descriptor
-      compute_shader,
-      // pipeline barrier
-      pipeline_barrier,
-      // global work group size
-      {
-          safe_downcast<uint32_t>(
-              div_up(v_output.sizes()[Layout::Parameter::width], INT64_C(4))),
-          safe_downcast<uint32_t>(
-              div_up(v_output.sizes()[Layout::Parameter::height], INT64_C(4))),
-          1,
-      },
-      // local work group size
-      {8, 8, 1},
-      // fence handle
-      VK_NULL_HANDLE,
-      // shader arguments
-      v_output.image(
-          pipeline_barrier,
-          api::PipelineStage::COMPUTE,
-          api::MemoryAccessType::WRITE),
-      v_input.image(pipeline_barrier, api::PipelineStage::COMPUTE),
-      packed_v_weight.image(pipeline_barrier, api::PipelineStage::COMPUTE),
-      // params buffer
-      params.buffer());
+  if (use_matvec) {
+    // matvec: one thread per output element
+    context->submit_compute_job(
+        compute_shader,
+        pipeline_barrier,
+        {
+            safe_downcast<uint32_t>(v_output.sizes()[Layout::Parameter::width]),
+            1,
+            1,
+        },
+        {64, 1, 1},
+        VK_NULL_HANDLE,
+        v_output.image(
+            pipeline_barrier,
+            api::PipelineStage::COMPUTE,
+            api::MemoryAccessType::WRITE),
+        v_input.image(pipeline_barrier, api::PipelineStage::COMPUTE),
+        packed_v_weight.image(pipeline_barrier, api::PipelineStage::COMPUTE),
+        params.buffer());
+  } else {
+    context->submit_compute_job(
+        compute_shader,
+        pipeline_barrier,
+        {
+            safe_downcast<uint32_t>(
+                div_up(v_output.sizes()[Layout::Parameter::width], INT64_C(4))),
+            safe_downcast<uint32_t>(div_up(
+                v_output.sizes()[Layout::Parameter::height], INT64_C(4))),
+            1,
+        },
+        {8, 8, 1},
+        VK_NULL_HANDLE,
+        v_output.image(
+            pipeline_barrier,
+            api::PipelineStage::COMPUTE,
+            api::MemoryAccessType::WRITE),
+        v_input.image(pipeline_barrier, api::PipelineStage::COMPUTE),
+        packed_v_weight.image(pipeline_barrier, api::PipelineStage::COMPUTE),
+        params.buffer());
+  }
 
   Tensor output = convert(v_output);
 
@@ -838,33 +854,51 @@ Tensor run_baddbmm_context(
 
   api::PipelineBarrier pipeline_barrier{};
 
-  context->submit_compute_job(
-      // shader descriptor
-      VK_KERNEL(mm),
-      // pipeline barrier
-      pipeline_barrier,
-      // global work group size
-      {
-          safe_downcast<uint32_t>(div_up(
-              v_output.sizes()[Layout::BatchMatrices::width], INT64_C(4))),
-          safe_downcast<uint32_t>(div_up(
-              v_output.sizes()[Layout::BatchMatrices::height], INT64_C(4))),
-          safe_downcast<uint32_t>(
-              v_output.sizes()[Layout::BatchMatrices::batch]),
-      },
-      // local work group size
-      {8, 8, 1},
-      // fence handle
-      VK_NULL_HANDLE,
-      // shader arguments
-      v_output.image(
-          pipeline_barrier,
-          api::PipelineStage::COMPUTE,
-          api::MemoryAccessType::WRITE),
-      packed_v_input.image(pipeline_barrier, api::PipelineStage::COMPUTE),
-      packed_v_weight.image(pipeline_barrier, api::PipelineStage::COMPUTE),
-      // params buffer
-      params.buffer());
+  const bool use_matvec_bmm =
+      packed_v_input.sizes()[Layout::BatchMatrices::height] == 1;
+
+  if (use_matvec_bmm) {
+    context->submit_compute_job(
+        VK_KERNEL(matvec),
+        pipeline_barrier,
+        {
+            safe_downcast<uint32_t>(
+                v_output.sizes()[Layout::BatchMatrices::width]),
+            1,
+            safe_downcast<uint32_t>(
+                v_output.sizes()[Layout::BatchMatrices::batch]),
+        },
+        {64, 1, 1},
+        VK_NULL_HANDLE,
+        v_output.image(
+            pipeline_barrier,
+            api::PipelineStage::COMPUTE,
+            api::MemoryAccessType::WRITE),
+        packed_v_input.image(pipeline_barrier, api::PipelineStage::COMPUTE),
+        packed_v_weight.image(pipeline_barrier, api::PipelineStage::COMPUTE),
+        params.buffer());
+  } else {
+    context->submit_compute_job(
+        VK_KERNEL(mm),
+        pipeline_barrier,
+        {
+            safe_downcast<uint32_t>(div_up(
+                v_output.sizes()[Layout::BatchMatrices::width], INT64_C(4))),
+            safe_downcast<uint32_t>(div_up(
+                v_output.sizes()[Layout::BatchMatrices::height], INT64_C(4))),
+            safe_downcast<uint32_t>(
+                v_output.sizes()[Layout::BatchMatrices::batch]),
+        },
+        {8, 8, 1},
+        VK_NULL_HANDLE,
+        v_output.image(
+            pipeline_barrier,
+            api::PipelineStage::COMPUTE,
+            api::MemoryAccessType::WRITE),
+        packed_v_input.image(pipeline_barrier, api::PipelineStage::COMPUTE),
+        packed_v_weight.image(pipeline_barrier, api::PipelineStage::COMPUTE),
+        params.buffer());
+  }
 
   // After computing the multiplication, we need to slice 4 on the batch
   // dimension to get the channel packed layout.
