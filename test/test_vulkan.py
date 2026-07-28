@@ -181,6 +181,30 @@ class TestVulkanNativeOps(TestCase):
             -1, gather_index, scatter_src.vulkan()).cpu()
         self.assertEqual(actual_scatter, expected_scatter)
 
+        norm_input = torch.randn(3, 2, 8)
+        weight = torch.randn(8)
+        bias = torch.randn(8)
+        rms_expected = (
+            norm_input *
+            torch.rsqrt(norm_input.square().mean(-1, keepdim=True) + 1e-5) *
+            weight)
+        rms_actual = torch.ops.vulkan_prepack.rms_norm(
+            norm_input.vulkan(), weight.vulkan()).cpu()
+        self.assertEqual(rms_actual, rms_expected, atol=1e-4, rtol=1e-4)
+
+        layer_expected = torch.nn.functional.layer_norm(
+            norm_input, (8,), weight, bias, 1e-5)
+        layer_actual = torch.ops.vulkan_prepack.layer_norm(
+            norm_input.vulkan(), weight.vulkan(), bias.vulkan()).cpu()
+        self.assertEqual(layer_actual, layer_expected, atol=1e-4, rtol=1e-4)
+
+        silu_input = torch.randn(3, 2, 16)
+        gate, up = silu_input.chunk(2, dim=-1)
+        silu_expected = torch.nn.functional.silu(gate) * up
+        silu_actual = torch.ops.vulkan_prepack.silu_mul(
+            silu_input.vulkan()).cpu()
+        self.assertEqual(silu_actual, silu_expected, atol=1e-4, rtol=1e-4)
+
         condition = torch.tensor([[[True], [False]]])
         where_self = torch.randn(3, 2, 4, dtype=torch.float)
         where_other = torch.randn(1, 1, 4, dtype=torch.half)
@@ -240,6 +264,21 @@ class TestVulkanNativeOps(TestCase):
 
         halfway = torch.tensor([-2.5, -1.5, -0.5, 0.5, 1.5, 2.5])
         self.assertEqual(torch.round(halfway.vulkan()).cpu(), torch.round(halfway))
+
+    def test_unsupported_native_registrations(self):
+        self.assertFalse(torch._C._dispatch_has_kernel_for_dispatch_key(
+            "aten::topk", "Vulkan"))
+        self.assertFalse(torch._C._dispatch_has_kernel_for_dispatch_key(
+            "aten::native_group_norm", "Vulkan"))
+
+    def test_fused_odd_width_validation(self):
+        with self.assertRaisesRegex(RuntimeError, "must be even"):
+            torch.ops.vulkan_prepack.silu_mul(torch.randn(2, 7).vulkan())
+        with self.assertRaisesRegex(RuntimeError, "must be even"):
+            torch.ops.vulkan_prepack.rotary_embedding(
+                torch.randn(1, 2, 7).vulkan(),
+                torch.randn(2, 4).vulkan(),
+                torch.randn(2, 4).vulkan())
 
 
 if __name__ == "__main__":
