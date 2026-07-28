@@ -125,6 +125,89 @@ Tensor& log_(Tensor& self_arg) {
   return unary_op_(self_arg, VK_KERNEL(log_inplace));
 }
 
+Tensor neg(const Tensor& self_arg) {
+  return unary_op(self_arg, VK_KERNEL(neg));
+}
+
+Tensor& neg_(Tensor& self_arg) {
+  return unary_op_(self_arg, VK_KERNEL(neg_inplace));
+}
+
+Tensor floor(const Tensor& self_arg) {
+  return unary_op(self_arg, VK_KERNEL(floor));
+}
+
+Tensor& floor_(Tensor& self_arg) {
+  return unary_op_(self_arg, VK_KERNEL(floor_inplace));
+}
+
+Tensor ceil(const Tensor& self_arg) {
+  return unary_op(self_arg, VK_KERNEL(ceil));
+}
+
+Tensor& ceil_(Tensor& self_arg) {
+  return unary_op_(self_arg, VK_KERNEL(ceil_inplace));
+}
+
+Tensor round(const Tensor& self_arg) {
+  return unary_op(self_arg, VK_KERNEL(round));
+}
+
+Tensor& round_(Tensor& self_arg) {
+  return unary_op_(self_arg, VK_KERNEL(round_inplace));
+}
+
+Tensor sign(const Tensor& self_arg) {
+  return unary_op(self_arg, VK_KERNEL(sign));
+}
+
+Tensor sin(const Tensor& self_arg) {
+  return unary_op(self_arg, VK_KERNEL(sin));
+}
+
+Tensor& sin_(Tensor& self_arg) {
+  return unary_op_(self_arg, VK_KERNEL(sin_inplace));
+}
+
+Tensor cos(const Tensor& self_arg) {
+  return unary_op(self_arg, VK_KERNEL(cos));
+}
+
+Tensor& cos_(Tensor& self_arg) {
+  return unary_op_(self_arg, VK_KERNEL(cos_inplace));
+}
+
+Tensor rsqrt(const Tensor& self_arg) {
+  return unary_op(self_arg, VK_KERNEL(rsqrt));
+}
+
+Tensor& rsqrt_(Tensor& self_arg) {
+  return unary_op_(self_arg, VK_KERNEL(rsqrt_inplace));
+}
+
+Tensor reciprocal(const Tensor& self_arg) {
+  return unary_op(self_arg, VK_KERNEL(reciprocal));
+}
+
+Tensor& reciprocal_(Tensor& self_arg) {
+  return unary_op_(self_arg, VK_KERNEL(reciprocal_inplace));
+}
+
+Tensor silu(const Tensor& self_arg) {
+  return unary_op(self_arg, VK_KERNEL(silu));
+}
+
+Tensor& silu_(Tensor& self_arg) {
+  return unary_op_(self_arg, VK_KERNEL(silu_inplace));
+}
+
+Tensor& silu_out(const Tensor& self_arg, Tensor& out) {
+  Tensor result = silu(self_arg);
+  out.resize_(result.sizes());
+  out.copy_(result);
+  return out;
+}
+
 #ifdef USE_VULKAN_API
 
 TORCH_LIBRARY_IMPL(aten, Vulkan, m) {
@@ -134,6 +217,26 @@ TORCH_LIBRARY_IMPL(aten, Vulkan, m) {
   m.impl(TORCH_SELECTIVE_NAME("aten::sqrt_"), TORCH_FN(sqrt_));
   m.impl(TORCH_SELECTIVE_NAME("aten::log"), TORCH_FN(log));
   m.impl(TORCH_SELECTIVE_NAME("aten::log_"), TORCH_FN(log_));
+  m.impl(TORCH_SELECTIVE_NAME("aten::neg"), TORCH_FN(neg));
+  m.impl(TORCH_SELECTIVE_NAME("aten::neg_"), TORCH_FN(neg_));
+  m.impl(TORCH_SELECTIVE_NAME("aten::floor"), TORCH_FN(floor));
+  m.impl(TORCH_SELECTIVE_NAME("aten::floor_"), TORCH_FN(floor_));
+  m.impl(TORCH_SELECTIVE_NAME("aten::ceil"), TORCH_FN(ceil));
+  m.impl(TORCH_SELECTIVE_NAME("aten::ceil_"), TORCH_FN(ceil_));
+  m.impl(TORCH_SELECTIVE_NAME("aten::round"), TORCH_FN(round));
+  m.impl(TORCH_SELECTIVE_NAME("aten::round_"), TORCH_FN(round_));
+  m.impl(TORCH_SELECTIVE_NAME("aten::sign"), TORCH_FN(sign));
+  m.impl(TORCH_SELECTIVE_NAME("aten::sin"), TORCH_FN(sin));
+  m.impl(TORCH_SELECTIVE_NAME("aten::sin_"), TORCH_FN(sin_));
+  m.impl(TORCH_SELECTIVE_NAME("aten::cos"), TORCH_FN(cos));
+  m.impl(TORCH_SELECTIVE_NAME("aten::cos_"), TORCH_FN(cos_));
+  m.impl(TORCH_SELECTIVE_NAME("aten::rsqrt"), TORCH_FN(rsqrt));
+  m.impl(TORCH_SELECTIVE_NAME("aten::rsqrt_"), TORCH_FN(rsqrt_));
+  m.impl(TORCH_SELECTIVE_NAME("aten::reciprocal"), TORCH_FN(reciprocal));
+  m.impl(TORCH_SELECTIVE_NAME("aten::reciprocal_"), TORCH_FN(reciprocal_));
+  m.impl(TORCH_SELECTIVE_NAME("aten::silu"), TORCH_FN(silu));
+  m.impl(TORCH_SELECTIVE_NAME("aten::silu_"), TORCH_FN(silu_));
+  m.impl(TORCH_SELECTIVE_NAME("aten::silu.out"), TORCH_FN(silu_out));
 }
 
 #endif /* USE_VULKAN_API */
