@@ -213,6 +213,42 @@ class TestVulkanNativeOps(TestCase):
             condition, where_self.vulkan(), where_other).cpu()
         self.assertEqual(where_actual, where_expected)
 
+        q8_weight = torch.randn(8, 4)
+        q8_weight_vk, q8_bias_vk, q8_scale_vk, q8_zero_point = (
+            torch.ops.vulkan_prepack.create_q8_linear(q8_weight, None))
+        with self.assertRaisesRegex(RuntimeError, "exactly one input row"):
+            torch.ops.vulkan_prepack.run_q8_linear(
+                torch.randn(2, 8).vulkan(),
+                q8_weight_vk,
+                q8_bias_vk,
+                q8_scale_vk,
+                q8_zero_point.item())
+
+        q8g_weight_vk, q8g_bias_vk, q8g_scale_vk, q8g_group_size = (
+            torch.ops.vulkan_prepack.create_q8g_linear(q8_weight, None, 8))
+        with self.assertRaisesRegex(RuntimeError, "exactly one input row"):
+            torch.ops.vulkan_prepack.run_q8g_linear(
+                torch.randn(2, 8).vulkan(),
+                q8g_weight_vk,
+                q8g_bias_vk,
+                q8g_scale_vk,
+                q8g_group_size.item())
+
+        q4g_weight_vk, q4g_bias_vk, q4g_scale_vk, q4g_group_size = (
+            torch.ops.vulkan_prepack.create_q4g_linear(q8_weight, None, 8))
+        with self.assertRaisesRegex(RuntimeError, "exactly one input row"):
+            torch.ops.vulkan_prepack.run_q4g_linear(
+                torch.randn(2, 8).vulkan(),
+                q4g_weight_vk,
+                q4g_bias_vk,
+                q4g_scale_vk,
+                q4g_group_size.item())
+
+        with self.assertRaisesRegex(
+                RuntimeError, "divisible by 8 for int4 packing"):
+            torch.ops.vulkan_prepack.create_q4g_linear(
+                torch.randn(8, 4), None, 4)
+
     def test_index_validation_and_scatter_source_strides(self):
         gather_input = torch.arange(4, dtype=torch.float).vulkan()
         for invalid_index in (-1, 2**32):
@@ -270,6 +306,82 @@ class TestVulkanNativeOps(TestCase):
             "aten::topk", "Vulkan"))
         self.assertFalse(torch._C._dispatch_has_kernel_for_dispatch_key(
             "aten::native_group_norm", "Vulkan"))
+
+    def test_quantized_linear_validation(self):
+        weight = torch.randn(8, 4)
+        with self.assertRaisesRegex(RuntimeError, "positive"):
+            torch.ops.vulkan_prepack.create_q8g_linear(weight, None, 0)
+        with self.assertRaisesRegex(RuntimeError, "positive"):
+            torch.ops.vulkan_prepack.create_q8g_linear(weight, None, -4)
+        with self.assertRaisesRegex(RuntimeError, "positive"):
+            torch.ops.vulkan_prepack.create_q4g_linear(weight, None, 0)
+        with self.assertRaisesRegex(RuntimeError, "positive"):
+            torch.ops.vulkan_prepack.create_q4g_linear(weight, None, -8)
+
+        weight_vk, bias_vk, scale_vk, zero_point = (
+            torch.ops.vulkan_prepack.create_q8_linear(weight, None))
+        with self.assertRaisesRegex(RuntimeError, "input K"):
+            torch.ops.vulkan_prepack.run_q8_linear(
+                torch.randn(7).vulkan(),
+                weight_vk,
+                bias_vk,
+                scale_vk,
+                zero_point.item())
+        with self.assertRaisesRegex(RuntimeError, "bias"):
+            torch.ops.vulkan_prepack.run_q8_linear(
+                torch.randn(8).vulkan(),
+                weight_vk,
+                torch.randn(2).vulkan(),
+                scale_vk,
+                zero_point.item())
+        with self.assertRaisesRegex(RuntimeError, "scale"):
+            torch.ops.vulkan_prepack.run_q8_linear(
+                torch.randn(8).vulkan(),
+                weight_vk,
+                bias_vk,
+                torch.randn(2).vulkan(),
+                zero_point.item())
+        with self.assertRaisesRegex(RuntimeError, "packed weight"):
+            torch.ops.vulkan_prepack.run_q8_linear(
+                torch.randn(8).vulkan(),
+                weight_vk.reshape(4, 2, 4),
+                bias_vk,
+                scale_vk,
+                zero_point.item())
+        with self.assertRaisesRegex(RuntimeError, "dtype qint8"):
+            torch.ops.vulkan_prepack.run_q8_linear(
+                torch.randn(8).vulkan(),
+                torch.randn(1, 4, 2, 4).vulkan(),
+                bias_vk,
+                scale_vk,
+                zero_point.item())
+
+        weight_q8g, bias_q8g, scale_q8g, _ = (
+            torch.ops.vulkan_prepack.create_q8g_linear(weight, None, 8))
+        with self.assertRaisesRegex(RuntimeError, "group size"):
+            torch.ops.vulkan_prepack.run_q8g_linear(
+                torch.randn(8).vulkan(),
+                weight_q8g,
+                bias_q8g,
+                scale_q8g,
+                0)
+        with self.assertRaisesRegex(RuntimeError, "scale"):
+            torch.ops.vulkan_prepack.run_q8g_linear(
+                torch.randn(8).vulkan(),
+                weight_q8g,
+                bias_q8g,
+                torch.randn(2, 4).vulkan(),
+                2)
+
+        weight_q4g, bias_q4g, scale_q4g, _ = (
+            torch.ops.vulkan_prepack.create_q4g_linear(weight, None, 8))
+        with self.assertRaisesRegex(RuntimeError, "group size"):
+            torch.ops.vulkan_prepack.run_q4g_linear(
+                torch.randn(8).vulkan(),
+                weight_q4g,
+                bias_q4g,
+                scale_q4g,
+                1)
 
     def test_fused_odd_width_validation(self):
         with self.assertRaisesRegex(RuntimeError, "must be even"):

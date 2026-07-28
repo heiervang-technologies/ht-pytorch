@@ -268,6 +268,18 @@ TORCH_LIBRARY(vulkan_prepack, m) {
       "vulkan_prepack::attn_score(Tensor Q, Tensor K, float scale, int n_heads, int n_kv_heads) -> Tensor Y"));
   m.def(TORCH_SELECTIVE_SCHEMA(
       "vulkan_prepack::attn_value(Tensor attn, Tensor V, int n_heads, int n_kv_heads) -> Tensor Y"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_prepack::create_q8_linear(Tensor W, Tensor? B) -> (Tensor, Tensor, Tensor, Tensor)"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_prepack::run_q8_linear(Tensor X, Tensor W_q8, Tensor B, Tensor scale, int zero_point) -> Tensor Y"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_prepack::create_q8g_linear(Tensor W, Tensor? B, int group_size) -> (Tensor, Tensor, Tensor, Tensor)"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_prepack::run_q8g_linear(Tensor X, Tensor W_q8, Tensor B, Tensor scale, int group_size_k4) -> Tensor Y"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_prepack::create_q4g_linear(Tensor W, Tensor? B, int group_size) -> (Tensor, Tensor, Tensor, Tensor)"));
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "vulkan_prepack::run_q4g_linear(Tensor X, Tensor W_q4, Tensor B, Tensor scale, int group_size_k4) -> Tensor Y"));
 }
 
 TORCH_LIBRARY_IMPL(vulkan_prepack, CPU, m) {
