@@ -1,0 +1,72 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Input {
+    float source[];
+};
+layout(set = 0, binding = 1) buffer Output {
+    uint destination[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+    uint ndim;
+    uint size0;
+    uint size1;
+    uint size2;
+    uint size3;
+    uint src_stride0;
+    uint src_stride1;
+    uint src_stride2;
+    uint src_stride3;
+    uint src_offset;
+    uint dst_stride0;
+    uint dst_stride1;
+    uint dst_stride2;
+    uint dst_stride3;
+    uint dst_offset;
+} pc;
+
+void coordinates(
+    uint index,
+    out uint coordinate0,
+    out uint coordinate1,
+    out uint coordinate2,
+    out uint coordinate3
+) {
+    coordinate3 = index % pc.size3;
+    index /= pc.size3;
+    coordinate2 = index % pc.size2;
+    index /= pc.size2;
+    coordinate1 = index % pc.size1;
+    coordinate0 = index / pc.size1;
+}
+
+uint to_bfloat16(float value) {
+    uint bits = floatBitsToUint(value);
+    return (bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16;
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= pc.num_elements) {
+        return;
+    }
+    uint i0;
+    uint i1;
+    uint i2;
+    uint i3;
+    coordinates(index, i0, i1, i2, i3);
+    uint source_index = pc.src_offset + i0 * pc.src_stride0 +
+        i1 * pc.src_stride1 + i2 * pc.src_stride2 +
+        i3 * pc.src_stride3;
+    uint destination_index = pc.dst_offset + i0 * pc.dst_stride0 +
+        i1 * pc.dst_stride1 + i2 * pc.dst_stride2 +
+        i3 * pc.dst_stride3;
+    uint shift = (destination_index % 2) * 16;
+    uint mask = 0xffffu << shift;
+    uint value = to_bfloat16(source[source_index]) << shift;
+    atomicAnd(destination[destination_index / 2], ~mask);
+    atomicOr(destination[destination_index / 2], value);
+}

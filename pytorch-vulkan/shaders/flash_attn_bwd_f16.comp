@@ -1,6 +1,7 @@
 #version 450
 #extension GL_EXT_shader_atomic_float : enable
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 
 // Flash Attention 2 Backward Pass (f16 inputs)
 //

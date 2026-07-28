@@ -1,19 +1,14 @@
-"""AOT Autograd integration for training support.
+"""AOT Autograd integration for the experimental Vulkan FX backend."""
 
-Wraps the Vulkan Inductor backend with functorch's aot_autograd so that
-torch.compile(backend='vulkan_train') automatically traces both forward
-and backward FX graphs. The forward graph is compiled to Vulkan SPIR-V
-shaders; the backward graph initially falls back to eager CPU execution
-while we catalog the required backward ops and build shaders for them.
-"""
+import logging
+from collections import Counter
 
 import torch
 import torch._dynamo
 from torch._functorch.aot_autograd import aot_module_simplified
-import logging
-from collections import Counter
 
-from pytorch_vulkan.inductor_backend import vulkan_compiler
+from pytorch_vulkan.fx_backend import vulkan_fx_compiler
+
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +17,7 @@ _backward_op_counts: Counter = Counter()
 
 
 _training_registered = False
+
 
 def register_training():
     """Register the training-aware Vulkan backend with torch.compile."""
@@ -34,11 +30,7 @@ def register_training():
 
 
 def vulkan_train_compiler(gm: torch.fx.GraphModule, example_inputs: list):
-    """Dynamo backend entry point for training.
-
-    Uses aot_autograd to split the graph into forward and backward,
-    compiles forward with Vulkan, backward with eager fallback + logging.
-    """
+    """Split a graph with AOT Autograd and compile both FX graphs."""
     return aot_module_simplified(
         gm,
         example_inputs,
@@ -52,7 +44,7 @@ def _forward_compiler(gm: torch.fx.GraphModule, example_inputs: list):
     """Compile the forward graph using our Vulkan backend."""
     log.info("=== AOT Forward Graph ===")
     _log_graph_ops(gm, "forward")
-    return vulkan_compiler(gm, example_inputs)
+    return vulkan_fx_compiler(gm, example_inputs)
 
 
 def _backward_compiler(gm: torch.fx.GraphModule, example_inputs: list):
@@ -66,8 +58,7 @@ def _backward_compiler(gm: torch.fx.GraphModule, example_inputs: list):
     # Accumulate stats for analysis.
     _backward_op_counts.update(ops)
 
-    # Now that dim reductions are fixed, we can compile the backward pass natively.
-    return vulkan_compiler(gm, example_inputs)
+    return vulkan_fx_compiler(gm, example_inputs)
 
 
 def _log_graph_ops(gm: torch.fx.GraphModule, label: str) -> list[str]:
@@ -77,7 +68,9 @@ def _log_graph_ops(gm: torch.fx.GraphModule, label: str) -> list[str]:
         if node.op == "call_function":
             op_name = str(node.target)
             ops.append(op_name)
-            log.info("  [%s] %s: %s (args=%d)", label, node.name, op_name, len(node.args))
+            log.info(
+                "  [%s] %s: %s (args=%d)", label, node.name, op_name, len(node.args)
+            )
     log.info("  [%s] Total ops: %d", label, len(ops))
     return ops
 

@@ -1,0 +1,19 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Values {
+    float16_t values[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+} pc;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index < pc.num_elements && isnan(float(values[index]))) {
+        values[index] = float16_t(0.0);
+    }
+}

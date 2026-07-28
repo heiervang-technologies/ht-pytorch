@@ -1,0 +1,57 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer GradOutput {
+    float grad_output[];
+};
+layout(set = 0, binding = 1) readonly buffer Indices {
+    uint index_words[];
+};
+layout(set = 0, binding = 2) writeonly buffer GradWeight {
+    float grad_weight[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_indices;
+    uint num_weights;
+    uint embedding_dim;
+    int padding_idx;
+    uint scale_grad_by_freq;
+    uint index_word_stride;
+};
+
+bool matches_row(uint index, int row) {
+    uint word = index * index_word_stride;
+    if (index_word_stride == 2 && index_words[word + 1] != 0) {
+        return false;
+    }
+    return int(index_words[word]) == row;
+}
+
+void main() {
+    uint output_index = gl_GlobalInvocationID.x;
+    if (output_index >= num_weights * embedding_dim) {
+        return;
+    }
+
+    int row = int(output_index / embedding_dim);
+    uint column = output_index % embedding_dim;
+    if (row == padding_idx) {
+        grad_weight[output_index] = 0.0;
+        return;
+    }
+
+    float sum = 0.0;
+    uint frequency = 0;
+    for (uint i = 0; i < num_indices; ++i) {
+        if (matches_row(i, row)) {
+            sum += grad_output[i * embedding_dim + column];
+            frequency += 1;
+        }
+    }
+    if (scale_grad_by_freq != 0 && frequency != 0) {
+        sum /= float(frequency);
+    }
+    grad_weight[output_index] = sum;
+}

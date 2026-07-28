@@ -1,14 +1,41 @@
 """Build script for pytorch-vulkan (Rust + C++ shim)."""
 
 import subprocess
+import sys
 from pathlib import Path
 
 from setuptools import setup
-from torch.utils.cpp_extension import CppExtension, BuildExtension
+from setuptools.command.build_py import build_py
+from torch.utils.cpp_extension import BuildExtension, CppExtension
+
+
+_shaders_compiled = False
+
+
+def compile_shaders() -> None:
+    global _shaders_compiled
+    if _shaders_compiled:
+        return
+    root = Path(__file__).parent
+    subprocess.check_call(
+        [sys.executable, str(root / "tools" / "compile_shaders.py")],
+        cwd=str(root),
+    )
+    _shaders_compiled = True
+
+
+class ShaderBuildPy(build_py):
+    def run(self):
+        compile_shaders()
+        super().run()
 
 
 class RustCppBuildExt(BuildExtension):
     """Custom BuildExtension that first compiles the Rust crate."""
+
+    def run(self):
+        compile_shaders()
+        super().run()
 
     def build_extension(self, ext):
         rust_dir = Path(__file__).parent / "rust"
@@ -16,7 +43,7 @@ class RustCppBuildExt(BuildExtension):
 
         # Build Rust crate.
         subprocess.check_call(
-            ["cargo", "build", "--release"],
+            ["cargo", "build", "--release", "--locked"],
             cwd=str(rust_dir),
         )
 
@@ -32,9 +59,6 @@ class RustCppBuildExt(BuildExtension):
 
 
 setup(
-    name="pytorch-vulkan",
-    version="0.1.0",
-    packages=["pytorch_vulkan"],
     ext_modules=[
         CppExtension(
             name="pytorch_vulkan._C",
@@ -43,5 +67,8 @@ setup(
             extra_compile_args=["-std=c++17"],
         ),
     ],
-    cmdclass={"build_ext": RustCppBuildExt},
+    cmdclass={
+        "build_ext": RustCppBuildExt,
+        "build_py": ShaderBuildPy,
+    },
 )

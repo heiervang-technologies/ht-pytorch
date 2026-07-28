@@ -7,14 +7,52 @@ layout(set = 0, binding = 1) buffer Output { uint result[]; };
 
 layout(push_constant) uniform PushConstants {
     uint num_elements;
-};
+    uint ndim;
+    uint size0;
+    uint size1;
+    uint size2;
+    uint size3;
+    uint src_stride0;
+    uint src_stride1;
+    uint src_stride2;
+    uint src_stride3;
+    uint src_offset;
+    uint dst_stride0;
+    uint dst_stride1;
+    uint dst_stride2;
+    uint dst_stride3;
+    uint dst_offset;
+} pc;
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
-    if (idx < num_elements) {
-        uint a_word = a[idx / 2];
-        uint shift = (idx % 2) * 16;
-        uint a_val = (a_word >> shift) & 0xFFFF;
-        atomicOr(result[idx / 2], a_val << shift);
-    }
+    if (idx >= pc.num_elements) return;
+
+    uint linear_idx = idx;
+    uint i3 = linear_idx % pc.size3;
+    linear_idx /= pc.size3;
+    uint i2 = linear_idx % pc.size2;
+    linear_idx /= pc.size2;
+    uint i1 = linear_idx % pc.size1;
+    linear_idx /= pc.size1;
+    uint i0 = linear_idx;
+
+    uint source_index =
+        pc.src_offset
+        + i0 * pc.src_stride0
+        + i1 * pc.src_stride1
+        + i2 * pc.src_stride2
+        + i3 * pc.src_stride3;
+    uint destination_index =
+        pc.dst_offset
+        + i0 * pc.dst_stride0
+        + i1 * pc.dst_stride1
+        + i2 * pc.dst_stride2
+        + i3 * pc.dst_stride3;
+    uint source_shift = (source_index % 2) * 16;
+    uint destination_shift = (destination_index % 2) * 16;
+    uint value = (a[source_index / 2] >> source_shift) & 0xFFFF;
+    uint mask = 0xFFFFu << destination_shift;
+    atomicAnd(result[destination_index / 2], ~mask);
+    atomicOr(result[destination_index / 2], value << destination_shift);
 }

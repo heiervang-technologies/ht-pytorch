@@ -1,0 +1,31 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Data { uint data[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint num_elements;
+    float value;
+} pc;
+
+uint f32_to_bf16(float value) {
+    uint bits = floatBitsToUint(value);
+    return (bits + 0x7FFF + ((bits >> 16) & 1)) >> 16;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint first = idx * 2;
+    if (first >= pc.num_elements) {
+        return;
+    }
+    uint converted = f32_to_bf16(pc.value);
+    uint packed = converted;
+    if (first + 1 < pc.num_elements) {
+        packed |= converted << 16;
+    } else {
+        packed |= data[idx] & 0xFFFF0000;
+    }
+    data[idx] = packed;
+}
