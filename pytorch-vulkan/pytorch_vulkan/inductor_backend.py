@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from pytorch_vulkan.device import load_shader_bytes
+
 log = logging.getLogger(__name__)
 
 SHADER_DIR = Path(__file__).parent.parent / "shaders"
@@ -405,7 +407,7 @@ def _compile_and_load(ext, shader_file: str) -> Optional[int]:
         return None
 
     spirv = compile_glsl_to_spirv(glsl_path.read_text())
-    handle = ext.load_shader(spirv)
+    handle = load_shader_bytes(ext, spirv)
     if handle == 0:
         log.error("Failed to load shader pipeline for %s", shader_file)
         return None

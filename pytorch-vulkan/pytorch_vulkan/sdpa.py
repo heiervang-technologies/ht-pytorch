@@ -11,6 +11,8 @@ import torch.nn.functional as F
 import logging
 from typing import Optional
 
+from pytorch_vulkan.device import load_shader_bytes
+
 log = logging.getLogger(__name__)
 
 _sdpa_pipeline = None
@@ -42,7 +44,7 @@ def _get_sdpa_pipeline():
         return None
 
     spirv = compile_glsl_to_spirv(shader_path.read_text())
-    handle = ext.load_shader(spirv)
+    handle = load_shader_bytes(ext, spirv)
     if handle == 0:
         log.error("Failed to load SDPA pipeline")
         return None

@@ -11,6 +11,8 @@ import torch
 import logging
 from typing import Optional
 
+from pytorch_vulkan.device import load_shader_bytes
+
 log = logging.getLogger(__name__)
 
 _fa_fwd_pipeline = None
@@ -52,7 +54,7 @@ def _get_fa_pipelines():
             log.warning("FA2 shader not found: %s", path)
             return None, None, None, None
         spirv = compile_glsl_to_spirv(path.read_text())
-        handle = ext.load_shader(spirv)
+        handle = load_shader_bytes(ext, spirv)
         if handle == 0:
             log.error("Failed to load FA2 pipeline: %s", name)
             return None, None, None, None
@@ -250,7 +252,7 @@ def _get_kvcache_pipeline():
     if not path.exists():
         return None
     spirv = compile_glsl_to_spirv(path.read_text())
-    handle = ext.load_shader(spirv)
+    handle = load_shader_bytes(ext, spirv)
     if handle == 0:
         return None
     _fa_kvcache_f16_pipeline = handle

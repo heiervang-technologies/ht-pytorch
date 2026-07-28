@@ -1,15 +1,18 @@
 use ash::vk;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::allocator;
 use crate::device::VulkanDevice;
 use crate::error::VkcError;
+
+static ACTIVE_PIPELINES: AtomicUsize = AtomicUsize::new(0);
 
 /// A compiled compute pipeline ready for dispatch.
 pub struct ComputePipeline {
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
-    descriptor_pool: vk::DescriptorPool,
+    binding_count: u32,
 }
 
 /// Load SPIR-V bytecode and create a compute pipeline.
@@ -19,9 +22,21 @@ pub struct ComputePipeline {
 pub fn load_compute_pipeline(
     dev: &VulkanDevice,
     spirv_bytes: &[u8],
+    binding_count: u32,
 ) -> Result<ComputePipeline, VkcError> {
     if spirv_bytes.len() % 4 != 0 {
         return Err(VkcError::InvalidSpirv(spirv_bytes.len()));
+    }
+    let limits = &dev.properties().limits;
+    let device_binding_limit = limits
+        .max_per_stage_descriptor_storage_buffers
+        .min(limits.max_descriptor_set_storage_buffers)
+        .min(crate::device::MAX_STORAGE_BUFFER_BINDINGS);
+    if binding_count == 0 || binding_count > device_binding_limit {
+        return Err(VkcError::Shader(format!(
+            "shader requires {binding_count} storage buffers, device limit is \
+             {device_binding_limit}"
+        )));
     }
 
     let spirv: Vec<u32> = spirv_bytes
@@ -37,8 +52,7 @@ pub fn load_compute_pipeline(
             .map_err(VkcError::Vulkan)?
     };
 
-    // Create descriptor set layout with up to 8 storage buffer bindings.
-    let bindings: Vec<vk::DescriptorSetLayoutBinding> = (0..8)
+    let bindings: Vec<vk::DescriptorSetLayoutBinding> = (0..binding_count)
         .map(|i| {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(i)
@@ -52,15 +66,20 @@ pub fn load_compute_pipeline(
 
     // Use push descriptors if available (avoids descriptor pool allocation overhead).
     if dev.push_descriptor().is_some() {
-        layout_info = layout_info.flags(
-            vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR
-        );
+        layout_info = layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
     }
 
-    let descriptor_set_layout = unsafe {
+    let descriptor_set_layout = match unsafe {
         dev.device()
             .create_descriptor_set_layout(&layout_info, None)
-            .map_err(VkcError::Vulkan)?
+    } {
+        Ok(layout) => layout,
+        Err(error) => {
+            unsafe {
+                dev.device().destroy_shader_module(shader_module, None);
+            }
+            return Err(VkcError::Vulkan(error));
+        }
     };
 
     // Push constant range for up to 128 bytes.
@@ -73,10 +92,19 @@ pub fn load_compute_pipeline(
         .set_layouts(std::slice::from_ref(&descriptor_set_layout))
         .push_constant_ranges(std::slice::from_ref(&push_range));
 
-    let pipeline_layout = unsafe {
+    let pipeline_layout = match unsafe {
         dev.device()
             .create_pipeline_layout(&pipeline_layout_info, None)
-            .map_err(VkcError::Vulkan)?
+    } {
+        Ok(layout) => layout,
+        Err(error) => {
+            unsafe {
+                dev.device()
+                    .destroy_descriptor_set_layout(descriptor_set_layout, None);
+                dev.device().destroy_shader_module(shader_module, None);
+            }
+            return Err(VkcError::Vulkan(error));
+        }
     };
 
     let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -88,10 +116,23 @@ pub fn load_compute_pipeline(
         .stage(stage)
         .layout(pipeline_layout);
 
-    let pipeline = unsafe {
+    let pipeline = match unsafe {
         dev.device()
             .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
-            .map_err(|(_pipelines, err)| VkcError::Vulkan(err))?[0]
+    } {
+        Ok(pipelines) => pipelines[0],
+        Err((pipelines, error)) => {
+            unsafe {
+                for pipeline in pipelines {
+                    dev.device().destroy_pipeline(pipeline, None);
+                }
+                dev.device().destroy_pipeline_layout(pipeline_layout, None);
+                dev.device()
+                    .destroy_descriptor_set_layout(descriptor_set_layout, None);
+                dev.device().destroy_shader_module(shader_module, None);
+            }
+            return Err(VkcError::Vulkan(error));
+        }
     };
 
     // Shader module can be destroyed after pipeline creation.
@@ -99,32 +140,13 @@ pub fn load_compute_pipeline(
         dev.device().destroy_shader_module(shader_module, None);
     }
 
-    // Create descriptor pool.
-    let pool_size = vk::DescriptorPoolSize::default()
-        .ty(vk::DescriptorType::STORAGE_BUFFER)
-        .descriptor_count(16);
-
-    let pool_info = vk::DescriptorPoolCreateInfo::default()
-        .max_sets(1)
-        .pool_sizes(std::slice::from_ref(&pool_size));
-
-    let descriptor_pool = unsafe {
-        dev.device()
-            .create_descriptor_pool(&pool_info, None)
-            .map_err(VkcError::Vulkan)?
-    };
-
+    ACTIVE_PIPELINES.fetch_add(1, Ordering::Relaxed);
     Ok(ComputePipeline {
         pipeline,
         pipeline_layout,
         descriptor_set_layout,
-        descriptor_pool,
+        binding_count,
     })
-}
-
-/// Check if all buffer pointers are registered in the allocator registry.
-pub fn all_buffers_registered(buffer_ptrs: &[*const u8]) -> bool {
-    buffer_ptrs.iter().all(|ptr| allocator::lookup_buffer(*ptr).is_some())
 }
 
 /// Dispatch a compute pipeline with the given buffers and push constants.
@@ -135,26 +157,49 @@ pub fn dispatch(
     group_count: [u32; 3],
     push_constants: &[u8],
 ) -> Result<(), VkcError> {
+    if buffer_ptrs.len() != pipeline.binding_count as usize {
+        return Err(VkcError::Shader(format!(
+            "pipeline requires {} buffers, dispatch supplied {}",
+            pipeline.binding_count,
+            buffer_ptrs.len()
+        )));
+    }
     // Pre-validate all buffer pointers before recording into the command buffer.
-    let mut vk_buffers = Vec::with_capacity(buffer_ptrs.len());
+    let mut bindings = Vec::with_capacity(buffer_ptrs.len());
     for ptr in buffer_ptrs {
         match allocator::lookup_buffer(*ptr) {
-            Some(b) => vk_buffers.push(b),
-            None => return Err(VkcError::Allocation(
-                format!("no VkBuffer registered for host pointer {:p}", *ptr)
-            )),
+            Some(binding) => {
+                let alignment = dev
+                    .properties()
+                    .limits
+                    .min_storage_buffer_offset_alignment
+                    .max(1);
+                if binding.offset % alignment != 0 {
+                    return Err(VkcError::Allocation(format!(
+                        "buffer offset {} is not aligned to {}",
+                        binding.offset, alignment
+                    )));
+                }
+                bindings.push(binding);
+            }
+            None => {
+                return Err(VkcError::Allocation(format!(
+                    "no VkBuffer registered for host pointer {:p}",
+                    *ptr
+                )))
+            }
         }
     }
 
     dev.submit_async(|cmd, desc_pool| {
         // Build descriptor buffer infos from pre-validated VkBuffers.
         let mut buffer_infos: Vec<vk::DescriptorBufferInfo> = Vec::new();
-        for vk_buffer in &vk_buffers {
+        for binding in &bindings {
             buffer_infos.push(
                 vk::DescriptorBufferInfo::default()
-                    .buffer(*vk_buffer)
-                    .offset(0)
-                    .range(vk::WHOLE_SIZE),
+                    .buffer(binding.buffer)
+                    .offset(binding.offset)
+                    .range(binding.range),
             );
         }
 
@@ -169,11 +214,8 @@ pub fn dispatch(
         }
 
         unsafe {
-            dev.device().cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                pipeline.pipeline,
-            );
+            dev.device()
+                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.pipeline);
 
             if let Some(push_desc) = dev.push_descriptor() {
                 // Push descriptors: write directly into command buffer, no allocation.
@@ -189,9 +231,10 @@ pub fn dispatch(
                 let alloc_info = vk::DescriptorSetAllocateInfo::default()
                     .descriptor_pool(desc_pool)
                     .set_layouts(std::slice::from_ref(&pipeline.descriptor_set_layout));
-                let descriptor_set = dev.device()
+                let descriptor_set = dev
+                    .device()
                     .allocate_descriptor_sets(&alloc_info)
-                    .expect("Failed to allocate descriptor set")[0];
+                    .map_err(VkcError::Vulkan)?[0];
                 // Set dst_set on writes for traditional path.
                 let mut trad_writes = descriptor_writes.clone();
                 for w in &mut trad_writes {
@@ -218,28 +261,30 @@ pub fn dispatch(
                 );
             }
 
-            dev.device().cmd_dispatch(
-                cmd,
-                group_count[0],
-                group_count[1],
-                group_count[2],
-            );
-            
+            dev.device()
+                .cmd_dispatch(cmd, group_count[0], group_count[1], group_count[2]);
+
             // Add a barrier so subsequent dispatches see the result of this one.
             let memory_barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
-                
+                .dst_access_mask(
+                    vk::AccessFlags::SHADER_READ
+                        | vk::AccessFlags::SHADER_WRITE
+                        | vk::AccessFlags::TRANSFER_READ
+                        | vk::AccessFlags::TRANSFER_WRITE,
+                );
+
             dev.device().cmd_pipeline_barrier(
                 cmd,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::TRANSFER,
                 vk::DependencyFlags::empty(),
                 std::slice::from_ref(&memory_barrier),
                 &[],
                 &[],
             );
         }
+        Ok(())
     })?;
 
     Ok(())
@@ -250,9 +295,15 @@ impl ComputePipeline {
     pub fn destroy(&self, dev: &VulkanDevice) {
         unsafe {
             dev.device().destroy_pipeline(self.pipeline, None);
-            dev.device().destroy_pipeline_layout(self.pipeline_layout, None);
-            dev.device().destroy_descriptor_set_layout(self.descriptor_set_layout, None);
-            dev.device().destroy_descriptor_pool(self.descriptor_pool, None);
+            dev.device()
+                .destroy_pipeline_layout(self.pipeline_layout, None);
+            dev.device()
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }
+        ACTIVE_PIPELINES.fetch_sub(1, Ordering::Relaxed);
     }
+}
+
+pub fn active_pipelines() -> usize {
+    ACTIVE_PIPELINES.load(Ordering::Relaxed)
 }

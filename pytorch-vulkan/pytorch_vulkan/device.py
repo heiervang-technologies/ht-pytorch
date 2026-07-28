@@ -1,5 +1,7 @@
 """Vulkan device helpers wrapping the Rust/C++ extension."""
 
+import struct
+
 import torch
 
 
@@ -12,6 +14,33 @@ def _ext():
 
 
 _initialized = False
+
+
+def _shader_binding_count(spirv: bytes) -> int:
+    """Read descriptor binding decorations from a SPIR-V module."""
+    if len(spirv) < 20 or len(spirv) % 4:
+        raise ValueError("invalid SPIR-V bytecode")
+    words = struct.unpack(f"<{len(spirv) // 4}I", spirv)
+    bindings = set()
+    offset = 5
+    while offset < len(words):
+        word_count = words[offset] >> 16
+        opcode = words[offset] & 0xFFFF
+        if word_count == 0 or offset + word_count > len(words):
+            raise ValueError("invalid SPIR-V instruction stream")
+        # OpDecorate %target Binding binding_number
+        if opcode == 71 and word_count >= 4 and words[offset + 2] == 33:
+            bindings.add(words[offset + 3])
+        offset += word_count
+    if not bindings:
+        raise ValueError("SPIR-V shader has no descriptor bindings")
+    return max(bindings) + 1
+
+
+def load_shader_bytes(ext, spirv: bytes) -> int:
+    """Load SPIR-V through the binding-count-aware extension ABI."""
+    return int(ext.load_shader(spirv, _shader_binding_count(spirv)))
+
 
 def init() -> bool:
     global _initialized
@@ -128,7 +157,7 @@ def _register_native_shaders(ext):
             continue
         try:
             spirv = compile_glsl_to_spirv(path.read_text())
-            handle = ext.load_shader(spirv)
+            handle = load_shader_bytes(ext, spirv)
             if handle != 0:
                 ext.register_shader_handle(op_name, handle)
                 log.debug("Registered native shader: %s (handle=%d)", op_name, handle)
