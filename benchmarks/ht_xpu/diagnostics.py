@@ -62,6 +62,9 @@ def assert_tensor_residency(objects: Iterable[Any], expected_device: str) -> Non
         if isinstance(value, torch.Tensor):
             if value.device.type != expected:
                 failures.append(f"{path}: {value.device}")
+            gradient = getattr(value, "grad", None)
+            if gradient is not None:
+                visit(gradient, f"{path}.grad")
         elif isinstance(value, dict):
             for key, item in value.items():
                 visit(item, f"{path}.{key}")
