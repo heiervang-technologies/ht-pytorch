@@ -15,6 +15,22 @@ def qwen_rms_norm(x: Tensor, weight: Tensor, eps: float = 1e-6) -> Tensor:
     return (output * (1.0 + weight.float())).to(x.dtype)
 
 
+def qwen_rms_norm_gated(
+    hidden_states: Tensor,
+    gate: Tensor,
+    weight: Tensor,
+    eps: float = 1e-6,
+) -> Tensor:
+    """Qwen 3.5's DeltaNet output norm followed by a SiLU gate."""
+
+    input_dtype = hidden_states.dtype
+    normalized = hidden_states.float()
+    variance = normalized.square().mean(-1, keepdim=True)
+    normalized = normalized * torch.rsqrt(variance + eps)
+    normalized = weight * normalized.to(input_dtype)
+    return (normalized * F.silu(gate.float())).to(input_dtype)
+
+
 def swiglu(x: Tensor, gate_weight: Tensor, up_weight: Tensor) -> Tensor:
     return F.silu(F.linear(x, gate_weight)) * F.linear(x, up_weight)
 
@@ -77,6 +93,17 @@ def _mlp_forward(module: nn.Module, x: Tensor) -> Tensor:
     return module.down_proj(swiglu(x, module.gate_proj.weight, module.up_proj.weight))
 
 
+def _rms_norm_gated_forward(
+    module: nn.Module, hidden_states: Tensor, gate: Tensor
+) -> Tensor:
+    return qwen_rms_norm_gated(
+        hidden_states,
+        gate,
+        module.weight,
+        module.variance_epsilon,
+    )
+
+
 def enable_qwen35_compilation_paths(model: nn.Module) -> dict[str, int]:
     """Select equivalent, compiler-visible paths for supported Qwen modules.
 
@@ -86,12 +113,17 @@ def enable_qwen35_compilation_paths(model: nn.Module) -> dict[str, int]:
     Transformers or a model download.
     """
 
-    replaced = {"rms_norm": 0, "swiglu": 0}
+    replaced = {"rms_norm": 0, "rms_norm_gated": 0, "swiglu": 0}
     for module in model.modules():
         name = type(module).__name__
         if name in ("Qwen3_5RMSNorm", "Qwen3_5MoeRMSNorm"):
             module.forward = _rms_norm_forward.__get__(module, type(module))
             replaced["rms_norm"] += 1
+        elif name in ("Qwen3_5RMSNormGated", "Qwen3_5MoeRMSNormGated"):
+            if getattr(module, "activation", "silu") not in ("silu", "swish"):
+                continue
+            module.forward = _rms_norm_gated_forward.__get__(module, type(module))
+            replaced["rms_norm_gated"] += 1
         elif name in ("Qwen3_5MLP", "Qwen3_5MoeMLP"):
             hidden_act = getattr(getattr(module, "config", None), "hidden_act", "silu")
             if hidden_act not in ("silu", "swish"):

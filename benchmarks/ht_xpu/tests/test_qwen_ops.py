@@ -9,6 +9,7 @@ from benchmarks.ht_xpu.qwen_ops import (
     enable_qwen35_compilation_paths,
     gated_delta_rule,
     qwen_rms_norm,
+    qwen_rms_norm_gated,
     swiglu,
 )
 
@@ -67,6 +68,24 @@ class TestQwenOps(unittest.TestCase):
         self.assertIsNotNone(q.grad)
         self.assertIsNotNone(k.grad)
 
+    def test_gated_rms_norm_backward(self):
+        hidden = torch.randn(2, 8, requires_grad=True)
+        gate = torch.randn(2, 8, requires_grad=True)
+        weight = torch.randn(8, requires_grad=True)
+        output = qwen_rms_norm_gated(hidden, gate, weight)
+        normalized = hidden.float()
+        variance = normalized.pow(2).mean(-1, keepdim=True)
+        normalized = normalized * torch.rsqrt(variance + 1e-6)
+        reference = weight * normalized.to(hidden.dtype)
+        reference = (reference * torch.nn.functional.silu(gate.float())).to(
+            hidden.dtype
+        )
+        self.assertEqual(output, reference)
+        self.assertEqual(
+            torch.autograd.grad(output.sum(), (hidden, gate, weight)),
+            torch.autograd.grad(reference.sum(), (hidden, gate, weight)),
+        )
+
     def test_delta_rule_full_backward(self):
         inputs = [torch.randn(1, 2, 4, 3, requires_grad=True) for _ in range(3)]
         beta_logits = torch.randn(1, 2, 4, requires_grad=True)
@@ -96,7 +115,9 @@ class TestQwenOps(unittest.TestCase):
         reference = Block()
         optimized = copy.deepcopy(reference)
         replaced = enable_qwen35_compilation_paths(optimized)
-        self.assertEqual(replaced, {"rms_norm": 1, "swiglu": 1})
+        self.assertEqual(
+            replaced, {"rms_norm": 1, "rms_norm_gated": 0, "swiglu": 1}
+        )
         reference_input = torch.randn(2, 4, 8, requires_grad=True)
         optimized_input = reference_input.detach().clone().requires_grad_()
         reference_output = reference(reference_input)
