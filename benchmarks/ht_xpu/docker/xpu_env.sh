@@ -6,7 +6,9 @@ image=${HT_XPU_IMAGE:-ht-pytorch-xpu:ubuntu24.04-oneapi2025.3}
 venv_volume=${HT_XPU_VENV_VOLUME:-ht-pytorch-xpu-venv}
 pip_cache_volume=${HT_XPU_PIP_CACHE_VOLUME:-ht-pytorch-xpu-pip-cache}
 render_node=$(find /dev/dri -maxdepth 1 -name 'renderD*' -print -quit 2>/dev/null || true)
-hf_cache=${HF_HOME:-${HOME}/.cache/huggingface}
+# Keep benchmark assets deterministic even when the host points HF_HOME at a
+# different, partially populated cache. Override explicitly when desired.
+hf_cache=${HT_XPU_HF_CACHE:-${HOME}/.cache/huggingface}
 mkdir -p "${hf_cache}"
 
 cache_args=(
