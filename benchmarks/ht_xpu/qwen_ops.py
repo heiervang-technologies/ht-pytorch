@@ -96,6 +96,13 @@ def enable_qwen35_compilation_paths(model: nn.Module) -> dict[str, int]:
             hidden_act = getattr(getattr(module, "config", None), "hidden_act", "silu")
             if hidden_act not in ("silu", "swish"):
                 continue
+            # PEFT wraps these projections. Reading a wrapper's base weight
+            # directly would silently bypass its LoRA branch and gradients.
+            if any(
+                type(projection) is not nn.Linear
+                for projection in (module.gate_proj, module.up_proj, module.down_proj)
+            ):
+                continue
             if module.gate_proj.bias is not None or module.up_proj.bias is not None:
                 continue
             module.forward = _mlp_forward.__get__(module, type(module))

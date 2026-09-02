@@ -103,7 +103,7 @@ class QwenSFTConfig:
         unknown = set(options) - {field.name for field in fields(cls)}
         # Device and compilation mode are controlled by the shared runner so a
         # result cannot accidentally be labelled as a different variant/device.
-        unknown |= set(options) & {"device", "compile_model"}
+        unknown |= set(options) & {"device", "compile_model", "optimization_variant"}
         if unknown:
             raise ValueError(
                 f"unknown or runner-controlled Qwen options: {sorted(unknown)}"
@@ -323,7 +323,9 @@ class QwenSFTWorkload:
 
     def benchmark_metadata(self) -> dict[str, Any]:
         metadata = asdict(self.config)
-        for runner_setting in ("device", "compile_model", "compile_backend"):
+        for runner_setting in (
+            "device", "compile_model", "compile_backend", "optimization_variant"
+        ):
             metadata.pop(runner_setting)
         return metadata
 
@@ -498,6 +500,10 @@ def create_benchmark_workload(
     config = QwenSFTConfig.from_options(
         options, device=device, compile_model=variant in {"xpu-compiled", "ht"}
     )
+    if variant == "ht":
+        config = QwenSFTConfig(
+            **{**asdict(config), "optimization_variant": "ht"}
+        )
     return QwenSFTWorkload(config)
 
 
