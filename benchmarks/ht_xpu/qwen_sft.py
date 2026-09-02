@@ -270,6 +270,8 @@ class QwenSFTWorkload:
             trainable,
             lr=config.learning_rate,
             weight_decay=config.weight_decay,
+            foreach=False,
+            capturable=config.device.startswith("xpu"),
         )
         self._micro_step = 0
         self.train_dataset: Any | None = None
