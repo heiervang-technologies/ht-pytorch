@@ -26,6 +26,7 @@ case "${mode}" in
         "${python}" -m pip install -r requirements-build.txt
         git submodule sync --recursive
         git submodule update --init
+        git -C third_party/ideep submodule update --init mkl-dnn
         git -C third_party/kineto submodule update \
             --init libkineto/third_party/dynolog
         BUILD_TEST=0 USE_DISTRIBUTED=0 USE_MPI=0 USE_GLOO=0 \
