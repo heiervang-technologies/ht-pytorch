@@ -21,6 +21,8 @@ case "${mode}" in
         "${python}" -m pip install --no-cache-dir -r requirements-build.txt
         git submodule sync --recursive
         git submodule update --init
+        git -C third_party/kineto submodule update \
+            --init libkineto/third_party/dynolog
         BUILD_TEST=0 USE_DISTRIBUTED=0 USE_MPI=0 USE_GLOO=0 \
             USE_XPU=1 USE_CUDA=0 USE_ROCM=0 USE_XCCL=0 \
             TORCH_XPU_ARCH_LIST=lnl-m \
