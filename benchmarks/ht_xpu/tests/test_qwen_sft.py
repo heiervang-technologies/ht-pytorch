@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 from torch import nn
@@ -8,6 +9,7 @@ from benchmarks.ht_xpu.qwen_sft import (
     IGNORE_INDEX,
     QwenSFTConfig,
     QwenSFTWorkload,
+    create_benchmark_workload,
     deterministic_dolly_split,
     encode_response_only,
 )
@@ -137,6 +139,22 @@ class TestQwenSFT(unittest.TestCase):
                 {"gradient_checkpointing": "perhaps"},
                 device="cpu", compile_model=False,
             )
+        with self.assertRaisesRegex(ValueError, "runner-controlled"):
+            QwenSFTConfig.from_options(
+                {"optimization_variant": "ht"},
+                device="xpu", compile_model=True,
+            )
+
+    def test_shared_factory_keeps_baseline_and_ht_separate(self):
+        with patch("benchmarks.ht_xpu.qwen_sft.QwenSFTWorkload") as constructor:
+            create_benchmark_workload("xpu-compiled", "xpu", {"training": "full"})
+            baseline = constructor.call_args.args[0]
+            create_benchmark_workload("ht", "xpu", {"training": "full"})
+            candidate = constructor.call_args.args[0]
+        self.assertTrue(baseline.compile_model)
+        self.assertEqual(baseline.optimization_variant, "upstream")
+        self.assertTrue(candidate.compile_model)
+        self.assertEqual(candidate.optimization_variant, "ht")
 
 
 if __name__ == "__main__":
