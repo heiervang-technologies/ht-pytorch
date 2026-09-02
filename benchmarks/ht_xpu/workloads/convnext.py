@@ -155,6 +155,10 @@ class ConvNeXtWorkload:
             weight_decay=config.weight_decay,
             foreach=False,
             capturable=device.startswith("xpu"),
+            # The HT path uses torch-xpu-ops' native multi-tensor AdamW. The
+            # baseline stays explicitly single-tensor after foreach proved to
+            # move state off device on Lunar Lake.
+            fused=variant == "ht",
         )
         self.loss_fn = torch.nn.CrossEntropyLoss().to(device)
         source = batches or (
@@ -168,10 +172,6 @@ class ConvNeXtWorkload:
         train_step = self._train_step
         if variant in {"xpu-compiled", "ht"}:
             compile_kwargs: dict[str, Any] = {"backend": "inductor", "dynamic": False}
-            if variant == "ht":
-                # Autotune without CUDA graphs is the conservative XPU-oriented HT
-                # configuration. Channels-last removes repeated NCHW/NHWC reorders.
-                compile_kwargs["mode"] = "max-autotune-no-cudagraphs"
             train_step = torch.compile(train_step, **compile_kwargs)
         self._execute = train_step
 

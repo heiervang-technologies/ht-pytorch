@@ -49,6 +49,13 @@ Both steps write versioned JSON diagnostics under the ignored `results/`
 directory. Override `HT_XPU_TORCH_VERSION` to test another official release and
 `HT_XPU_IMAGE` to use another local image tag.
 
+The fork setup also builds torchvision from pinned source commit `499ca510`
+against the installed source Torch ABI. Binary torchvision wheels are not safe
+for a locally modified Torch build. The installer verifies the codeload archive
+checksum and installs Pillow without dependency resolution, so pip cannot replace
+Torch. For an offline/staged build, set `HT_XPU_TORCHVISION_SOURCE` to an unpacked
+checkout of that commit.
+
 For an interactive container:
 
 ```bash
@@ -76,3 +83,24 @@ For the benchmark-of-record, omit the workload overrides to train pretrained
 ConvNeXt-Tiny on CIFAR-100 at 224px with batch 32. Use
 `--workload-config checkpoint=PATH` to save after measurement and
 `--workload-config resume=PATH` to restore model, AdamW state, and step count.
+
+The compiled baseline uses default Inductor and safe single-tensor AdamW. The HT
+variant uses the same compiler configuration plus native fused XPU AdamW; it does
+not enable max-autotune on Lunar Lake. Run a matched acceptance pair with:
+
+```bash
+mkdir -p benchmarks/ht_xpu/results/convnext-acceptance
+flock benchmarks/ht_xpu/results/xpu.lock \
+  python -m benchmarks.ht_xpu.run --workload convnext --variant xpu-compiled \
+  --output benchmarks/ht_xpu/results/convnext-acceptance/xpu-compiled.json
+flock benchmarks/ht_xpu/results/xpu.lock \
+  python -m benchmarks.ht_xpu.run --workload convnext --variant ht \
+  --output benchmarks/ht_xpu/results/convnext-acceptance/ht.json
+python -m benchmarks.ht_xpu.report \
+  benchmarks/ht_xpu/results/convnext-acceptance
+```
+
+Run each device command under the shared `results/xpu.lock`, alternate baseline
+and HT order across five independent runs, and retain the 20 warm-up/100 measured
+step defaults. Acceptance requires the report's 1.10x median-throughput gate and
+confidence interval, full gradient/optimizer residency, and no CPU fallback.
