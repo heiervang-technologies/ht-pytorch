@@ -11,6 +11,13 @@ Pass the module containing registrations using `--workload-module`. Run with
 synchronization; initial compilation is excluded by warm-up and Dynamo graph-break
 and recompile counters are emitted as diagnostics.
 
+The Qwen benchmark keeps the comparison variants separate. `xpu-compiled` uses
+stock `backend="inductor"`; `ht` selects `backend="ht_xpu"`, compiler-visible
+Qwen RMSNorm/SwiGLU paths, and fixed-shape GEMM autotuning. The HT backend emits
+an `ht_xpu_graph_profile` structured-trace artifact for every forward and backward
+graph. This inventory is diagnostic evidence only: report speedups exclusively
+from measured benchmark JSON, never from the presence of an optimization.
+
 ## Intel XPU environment
 
 This environment targets the Intel Arc GPU in Lunar Lake (`lnl-m`). It does not
