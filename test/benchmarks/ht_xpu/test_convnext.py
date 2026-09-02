@@ -96,16 +96,13 @@ class TestConvNeXtCPU(unittest.TestCase):
                 torch.testing.assert_close(wanted, actual)
             self.assertTrue(resumed.optimizer.state)
 
-    def test_ht_preserves_full_step_and_selects_native_norm_option(self):
+    def test_ht_preserves_full_step_with_safe_default_compiler(self):
         with patch("torch.compile", side_effect=lambda function, **_: function) as compile_fn:
             workload = self._workload(variant="ht")
         self.assertFalse(workload.optimizer.defaults["foreach"])
         self.assertFalse(workload.optimizer.defaults["capturable"])
         self.assertFalse(workload.optimizer.defaults["fused"])
-        self.assertEqual(
-            compile_fn.call_args.kwargs["options"],
-            {"xpu.use_native_layer_norm": True},
-        )
+        self.assertNotIn("options", compile_fn.call_args.kwargs)
         before = [parameter.detach().clone() for parameter in workload.model.parameters()]
         images, targets = next(workload.batches)
 

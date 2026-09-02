@@ -172,8 +172,6 @@ class ConvNeXtWorkload:
         train_step = self._train_step
         if variant in {"xpu-compiled", "ht"}:
             compile_kwargs: dict[str, Any] = {"backend": "inductor", "dynamic": False}
-            if variant == "ht":
-                compile_kwargs["options"] = {"xpu.use_native_layer_norm": True}
             train_step = torch.compile(train_step, **compile_kwargs)
         self._execute = train_step
 

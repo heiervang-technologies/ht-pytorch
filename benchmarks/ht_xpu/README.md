@@ -101,10 +101,12 @@ ConvNeXt-Tiny on CIFAR-100 at 224px with batch 32. Use
 `--workload-config resume=PATH` to restore model, AdamW state, and step count.
 
 All XPU variants use native fused AdamW after validating that its optimizer state
-and gradients remain on the device. The compiled baseline otherwise uses default
-Inductor. The HT variant opts into native torch-xpu-ops LayerNorm forward/backward
-kernels instead of generic Inductor decompositions; it does not enable
-max-autotune on Lunar Lake. Run a matched acceptance pair with:
+and gradients remain on the device. Both compiled variants currently use safe
+default Inductor settings. The experimental `xpu.use_native_layer_norm` option is
+default-off: the native XPU backward kernel returns a contiguous gradient while
+Inductor can require an optimized non-contiguous stride, so enabling it for
+ConvNeXt is rejected until the fallback output-layout contract is fixed. Run a
+matched acceptance pair with:
 
 ```bash
 mkdir -p benchmarks/ht_xpu/results/convnext-acceptance
