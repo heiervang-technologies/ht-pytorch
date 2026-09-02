@@ -3,6 +3,8 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 image=${HT_XPU_IMAGE:-ht-pytorch-xpu:ubuntu24.04-oneapi2025.3}
+venv_volume=${HT_XPU_VENV_VOLUME:-ht-pytorch-xpu-venv}
+pip_cache_volume=${HT_XPU_PIP_CACHE_VOLUME:-ht-pytorch-xpu-pip-cache}
 render_node=$(find /dev/dri -maxdepth 1 -name 'renderD*' -print -quit 2>/dev/null || true)
 
 if [[ ${1:-shell} != build-image && -z ${render_node} ]]; then
@@ -21,6 +23,9 @@ case ${1:-shell} in
             --ipc=host \
             --user="$(id -u):$(id -g)" \
             --env=HOME=/tmp \
+            --env=PIP_CACHE_DIR=/tmp/.cache/pip \
+            --volume="${venv_volume}:/opt/venv" \
+            --volume="${pip_cache_volume}:/tmp/.cache/pip" \
             --volume="${repo_root}:/workspace" \
             --workdir=/workspace \
             "${image}"
@@ -32,6 +37,9 @@ case ${1:-shell} in
             --ipc=host \
             --user="$(id -u):$(id -g)" \
             --env=HOME=/tmp \
+            --env=PIP_CACHE_DIR=/tmp/.cache/pip \
+            --volume="${venv_volume}:/opt/venv" \
+            --volume="${pip_cache_volume}:/tmp/.cache/pip" \
             --volume="${repo_root}:/workspace" \
             --workdir=/workspace \
             "${image}" "${@:1}"

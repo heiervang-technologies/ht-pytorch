@@ -7,7 +7,7 @@ python=/opt/venv/bin/python
 
 case "${mode}" in
     official)
-        "${python}" -m pip install --no-cache-dir \
+        "${python}" -m pip install \
             --index-url https://download.pytorch.org/whl/xpu \
             "torch==${torch_version}"
         # Executing the file directly keeps the unbuilt checkout's top-level
@@ -23,7 +23,7 @@ case "${mode}" in
         source /opt/intel/oneapi/setvars.sh --force
         set -u
         "${python}" -m pip uninstall -y torch
-        "${python}" -m pip install --no-cache-dir -r requirements-build.txt
+        "${python}" -m pip install -r requirements-build.txt
         git submodule sync --recursive
         git submodule update --init --recursive
         USE_XPU=1 USE_CUDA=0 USE_ROCM=0 USE_XCCL=0 \
