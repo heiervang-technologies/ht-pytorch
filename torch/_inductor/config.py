@@ -2479,6 +2479,10 @@ class cuda(cutlass):
 
 @inherit_fields_from(cutlass)
 class xpu(cutlass):
+    # Preserve the optimized torch-xpu-ops LayerNorm kernels instead of
+    # decomposing forward/backward into generic pointwise reductions.
+    use_native_layer_norm = False
+
     # Xe arch to use for SYCL kernel compilation.
     # eg. 12, 20, which corresponding to Xe12(PVC) and Xe20 (BMG)
     arch: str | None = None

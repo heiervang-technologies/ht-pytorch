@@ -1,13 +1,18 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 
 from benchmarks.ht_xpu.harness import create_workload, register_workload
 from benchmarks.ht_xpu.diagnostics import assert_tensor_residency
 from benchmarks.ht_xpu.run import _workload_options
-from benchmarks.ht_xpu.workloads.convnext import ConvNeXtConfig, ConvNeXtWorkload
+from benchmarks.ht_xpu.workloads.convnext import (
+    _adamw_options,
+    ConvNeXtConfig,
+    ConvNeXtWorkload,
+)
 
 
 def _tiny_model(config: ConvNeXtConfig) -> torch.nn.Module:
@@ -36,6 +41,16 @@ class TestConvNeXtConfig(unittest.TestCase):
         register_workload(name, lambda variant, device: (variant, device))
         self.assertEqual(
             create_workload(name, "cpu", "cpu", {"ignored": "1"}), ("cpu", "cpu")
+        )
+
+    def test_xpu_optimizer_is_fused_for_every_variant(self):
+        self.assertEqual(
+            _adamw_options("xpu"),
+            {"foreach": False, "capturable": True, "fused": True},
+        )
+        self.assertEqual(
+            _adamw_options("cpu"),
+            {"foreach": False, "capturable": False, "fused": False},
         )
 
 
@@ -81,11 +96,16 @@ class TestConvNeXtCPU(unittest.TestCase):
                 torch.testing.assert_close(wanted, actual)
             self.assertTrue(resumed.optimizer.state)
 
-    def test_ht_selects_fused_adamw_and_preserves_full_step(self):
-        workload = self._workload(variant="ht")
+    def test_ht_preserves_full_step_and_selects_native_norm_option(self):
+        with patch("torch.compile", side_effect=lambda function, **_: function) as compile_fn:
+            workload = self._workload(variant="ht")
         self.assertFalse(workload.optimizer.defaults["foreach"])
         self.assertFalse(workload.optimizer.defaults["capturable"])
-        self.assertTrue(workload.optimizer.defaults["fused"])
+        self.assertFalse(workload.optimizer.defaults["fused"])
+        self.assertEqual(
+            compile_fn.call_args.kwargs["options"],
+            {"xpu.use_native_layer_norm": True},
+        )
         before = [parameter.detach().clone() for parameter in workload.model.parameters()]
         images, targets = next(workload.batches)
 
@@ -124,7 +144,7 @@ class TestConvNeXtXPU(unittest.TestCase):
         workload.step()
         self.assertFalse(workload.optimizer.defaults["foreach"])
         self.assertTrue(workload.optimizer.defaults["capturable"])
-        self.assertFalse(workload.optimizer.defaults["fused"])
+        self.assertTrue(workload.optimizer.defaults["fused"])
         state_tensors = [
             value
             for state in workload.optimizer.state.values()

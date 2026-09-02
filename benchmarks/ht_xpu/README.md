@@ -84,9 +84,11 @@ ConvNeXt-Tiny on CIFAR-100 at 224px with batch 32. Use
 `--workload-config checkpoint=PATH` to save after measurement and
 `--workload-config resume=PATH` to restore model, AdamW state, and step count.
 
-The compiled baseline uses default Inductor and safe single-tensor AdamW. The HT
-variant uses the same compiler configuration plus native fused XPU AdamW; it does
-not enable max-autotune on Lunar Lake. Run a matched acceptance pair with:
+All XPU variants use native fused AdamW after validating that its optimizer state
+and gradients remain on the device. The compiled baseline otherwise uses default
+Inductor. The HT variant opts into native torch-xpu-ops LayerNorm forward/backward
+kernels instead of generic Inductor decompositions; it does not enable
+max-autotune on Lunar Lake. Run a matched acceptance pair with:
 
 ```bash
 mkdir -p benchmarks/ht_xpu/results/convnext-acceptance
