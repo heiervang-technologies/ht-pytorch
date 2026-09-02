@@ -150,7 +150,11 @@ class ConvNeXtWorkload:
         )
         self.model.train()
         self.optimizer = torch.optim.AdamW(
-            self.model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+            self.model.parameters(),
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay,
+            foreach=False,
+            capturable=device.startswith("xpu"),
         )
         self.loss_fn = torch.nn.CrossEntropyLoss().to(device)
         source = batches or (

@@ -97,6 +97,8 @@ class TestQwenSFT(unittest.TestCase):
         )
         model = TinyLM()
         workload = QwenSFTWorkload(config, model=model, tokenizer=TinyTokenizer())
+        self.assertFalse(workload.optimizer.defaults["foreach"])
+        self.assertFalse(workload.optimizer.defaults["capturable"])
         batch = workload.prepare_example({"instruction": "a", "response": "answer"})
         initial = model.head.weight.detach().clone()
         self.assertFalse(workload.train_step(batch)["optimizer_step"])
@@ -155,6 +157,31 @@ class TestQwenSFT(unittest.TestCase):
         self.assertEqual(baseline.optimization_variant, "upstream")
         self.assertTrue(candidate.compile_model)
         self.assertEqual(candidate.optimization_variant, "ht")
+
+    @unittest.skipUnless(
+        getattr(torch, "xpu", None) is not None and torch.xpu.is_available(),
+        "requires Intel XPU",
+    )
+    def test_adamw_state_remains_on_xpu(self):
+        config = QwenSFTConfig(
+            training="full", device="xpu", sequence_length=8,
+            gradient_accumulation_steps=1,
+        )
+        workload = QwenSFTWorkload(
+            config, model=TinyLM(), tokenizer=TinyTokenizer()
+        )
+        batch = workload.prepare_example({"instruction": "a", "response": "answer"})
+        workload.train_step(batch)
+        self.assertFalse(workload.optimizer.defaults["foreach"])
+        self.assertTrue(workload.optimizer.defaults["capturable"])
+        state_tensors = [
+            value
+            for state in workload.optimizer.state.values()
+            for value in state.values()
+            if isinstance(value, torch.Tensor)
+        ]
+        self.assertTrue(state_tensors)
+        self.assertEqual({tensor.device.type for tensor in state_tensors}, {"xpu"})
 
 
 if __name__ == "__main__":

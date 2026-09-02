@@ -49,6 +49,8 @@ class TestConvNeXtCPU(unittest.TestCase):
 
     def test_full_training_step_updates_parameters_and_optimizer(self):
         workload = self._workload()
+        self.assertFalse(workload.optimizer.defaults["foreach"])
+        self.assertFalse(workload.optimizer.defaults["capturable"])
         before = [parameter.detach().clone() for parameter in workload.model.parameters()]
         loss = workload.step()
         self.assertTrue(torch.isfinite(loss))
@@ -74,6 +76,32 @@ class TestConvNeXtCPU(unittest.TestCase):
             for wanted, actual in zip(expected, resumed.model.parameters()):
                 torch.testing.assert_close(wanted, actual)
             self.assertTrue(resumed.optimizer.state)
+
+
+@unittest.skipUnless(
+    getattr(torch, "xpu", None) is not None and torch.xpu.is_available(),
+    "requires Intel XPU",
+)
+class TestConvNeXtXPU(unittest.TestCase):
+    def test_adamw_state_remains_on_xpu(self):
+        config = ConvNeXtConfig(
+            batch_size=2, image_size=8, num_classes=4, workers=0,
+            synthetic=True, pretrained=False, seed=7,
+        )
+        workload = ConvNeXtWorkload(
+            "xpu-eager", "xpu", config, model_builder=_tiny_model
+        )
+        workload.step()
+        self.assertFalse(workload.optimizer.defaults["foreach"])
+        self.assertTrue(workload.optimizer.defaults["capturable"])
+        state_tensors = [
+            value
+            for state in workload.optimizer.state.values()
+            for value in state.values()
+            if isinstance(value, torch.Tensor)
+        ]
+        self.assertTrue(state_tensors)
+        self.assertEqual({tensor.device.type for tensor in state_tensors}, {"xpu"})
 
 
 if __name__ == "__main__":
