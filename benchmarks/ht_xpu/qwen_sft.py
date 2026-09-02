@@ -43,6 +43,7 @@ class QwenSFTConfig:
     gradient_checkpointing: bool = False
     compile_model: bool = False
     compile_backend: str = "inductor"
+    optimization_variant: Literal["upstream", "ht"] = "upstream"
     lora_rank: int = 16
     lora_alpha: int = 32
     lora_dropout: float = 0.05
@@ -50,6 +51,8 @@ class QwenSFTConfig:
     def __post_init__(self) -> None:
         if self.training not in ("lora", "full"):
             raise ValueError("training must be 'lora' or 'full'")
+        if self.optimization_variant not in ("upstream", "ht"):
+            raise ValueError("optimization_variant must be 'upstream' or 'ht'")
         if self.sequence_length is None:
             object.__setattr__(
                 self, "sequence_length", 512 if self.training == "lora" else 256
@@ -235,9 +238,17 @@ class QwenSFTWorkload:
         self.eval_dataset: Any | None = None
         self.optimizer.zero_grad(set_to_none=True)
         if config.compile_model:
+            backend = config.compile_backend
+            if config.optimization_variant == "ht":
+                from benchmarks.ht_xpu.qwen_ops import (
+                    enable_qwen35_compilation_paths,
+                )
+
+                enable_qwen35_compilation_paths(self.model)
+                backend = "ht_xpu"
             self.model = torch.compile(
                 self.model,
-                backend=config.compile_backend,
+                backend=backend,
                 dynamic=False,
                 fullgraph=False,
             )
@@ -281,6 +292,7 @@ class QwenSFTWorkload:
                 training=args.training,
                 device=args.device,
                 compile_model=getattr(args, "compile", False),
+                optimization_variant=getattr(args, "optimization_variant", "upstream"),
                 gradient_checkpointing=getattr(args, "gradient_checkpointing", False),
             )
         )
@@ -395,6 +407,9 @@ def add_cli_arguments(parser: Any) -> None:
     parser.add_argument("--training", choices=("lora", "full"), default="lora")
     parser.add_argument("--device", default="xpu")
     parser.add_argument("--compile", action="store_true", dest="compile")
+    parser.add_argument(
+        "--optimization-variant", choices=("upstream", "ht"), default="upstream"
+    )
     parser.add_argument("--gradient-checkpointing", action="store_true")
 
 
