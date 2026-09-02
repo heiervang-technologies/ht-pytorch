@@ -34,6 +34,7 @@ case "${mode}" in
             TORCH_XPU_ARCH_LIST=lnl-m \
             CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-}" \
             "${python}" -m pip install -e . -v --no-build-isolation
+        benchmarks/ht_xpu/docker/install_torchvision.sh
         "${python}" -m benchmarks.ht_xpu.doctor --require-xpu \
             --output=benchmarks/ht_xpu/results/fork-doctor.json
         ;;

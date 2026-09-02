@@ -1,0 +1,2 @@
+# Keep runtime dependencies separate from Torch: the source build supplies torch.
+pillow==11.3.0
