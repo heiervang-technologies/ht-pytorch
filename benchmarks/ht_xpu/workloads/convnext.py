@@ -6,7 +6,7 @@ deterministic and does not download data or weights.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -202,6 +202,12 @@ class ConvNeXtWorkload:
 
     def residency_objects(self) -> list[Any]:
         return [self.model, self.optimizer, self.loss_fn]
+
+    def benchmark_metadata(self) -> dict[str, Any]:
+        metadata = asdict(self.config)
+        metadata.pop("checkpoint")
+        metadata.pop("resume")
+        return metadata
 
     def save_checkpoint(self, path: str | Path) -> None:
         path = Path(path)

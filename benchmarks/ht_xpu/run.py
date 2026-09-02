@@ -35,8 +35,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    if args.workload == "convnext":
-        importlib.import_module("benchmarks.ht_xpu.workloads.convnext")
+    builtins = {
+        "convnext": "benchmarks.ht_xpu.workloads.convnext",
+        "qwen35": "benchmarks.ht_xpu.qwen_sft",
+    }
+    if args.workload in builtins:
+        importlib.import_module(builtins[args.workload])
     for module in args.workload_module:
         importlib.import_module(module)
     device = args.device or ("cpu" if args.variant == "cpu" else "xpu")
