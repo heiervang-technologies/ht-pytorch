@@ -12,8 +12,13 @@ case "${mode}" in
         "${python}" -m pip install --no-cache-dir \
             --index-url https://download.pytorch.org/whl/xpu \
             "torch==${torch_version}"
-        "${python}" -m benchmarks.ht_xpu.doctor --require-xpu \
-            --output=benchmarks/ht_xpu/results/official-wheel-doctor.json
+        # Executing the file directly keeps the unbuilt checkout's top-level
+        # torch/ package off sys.path, so this gate really imports the wheel.
+        (
+            cd /tmp
+            "${python}" /workspace/benchmarks/ht_xpu/doctor.py --require-xpu \
+                --output=/workspace/benchmarks/ht_xpu/results/official-wheel-doctor.json
+        )
         ;;
     fork)
         "${python}" -m pip uninstall -y torch
