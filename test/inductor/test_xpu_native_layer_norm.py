@@ -64,31 +64,6 @@ class TestXPUNativeLayerNormConfig(unittest.TestCase):
             )
         self.assertIs(result, NotImplemented)
 
-    def test_meta_backward_layout_matches_explicit_contiguous_input(self):
-        mode = FakeTensorMode()
-        with mode:
-            base = torch.randn(2, 8, 3, 5, device="xpu")
-            permuted = base.permute(0, 2, 3, 1)
-            input = permuted.contiguous()
-            weight = torch.randn(8, device="xpu")
-            bias = torch.randn(8, device="xpu")
-            output, mean, rstd = torch.ops.aten.native_layer_norm.default(
-                input, [8], weight, bias, 1e-6
-            )
-            grad_input, _, _ = torch.ops.aten.native_layer_norm_backward.default(
-                torch.randn_like(output),
-                input,
-                [8],
-                mean,
-                rstd,
-                weight,
-                bias,
-                [True, True, True],
-            )
-
-        self.assertNotEqual(permuted.stride(), input.stride())
-        self.assertEqual(grad_input.stride(), input.stride())
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,23 +10,9 @@ from benchmarks.ht_xpu.diagnostics import assert_tensor_residency
 from benchmarks.ht_xpu.run import _workload_options
 from benchmarks.ht_xpu.workloads.convnext import (
     _adamw_options,
-    _HTLayerNorm2d,
-    _prepare_native_layer_norm,
     ConvNeXtConfig,
     ConvNeXtWorkload,
 )
-
-
-class LayerNorm2d(torch.nn.LayerNorm):
-    def forward(self, input):
-        output = torch.nn.functional.layer_norm(
-            input.permute(0, 2, 3, 1),
-            self.normalized_shape,
-            self.weight,
-            self.bias,
-            self.eps,
-        )
-        return output.permute(0, 3, 1, 2)
 
 
 def _tiny_model(config: ConvNeXtConfig) -> torch.nn.Module:
@@ -137,42 +123,6 @@ class TestConvNeXtCPU(unittest.TestCase):
             all(parameter.grad is not None for parameter in workload.model.parameters())
         )
         assert_tensor_residency(workload.residency_objects(), "cpu")
-
-    def test_ht_layer_norm_rewrite_preserves_state_and_results(self):
-        reference = torch.nn.Sequential(LayerNorm2d(4))
-        candidate = torch.nn.Sequential(LayerNorm2d(4))
-        candidate.load_state_dict(reference.state_dict())
-        original_keys = tuple(candidate.state_dict())
-
-        self.assertEqual(_prepare_native_layer_norm(candidate), 1)
-        self.assertIsInstance(candidate[0], _HTLayerNorm2d)
-        self.assertEqual(tuple(candidate.state_dict()), original_keys)
-
-        input = torch.randn(2, 4, 3, 5)
-        torch.testing.assert_close(candidate(input), reference(input))
-
-    def test_explicit_contiguous_matches_native_backward_layout_contract(self):
-        base = torch.randn(2, 4, 3, 5)
-        permuted = base.permute(0, 2, 3, 1)
-        contiguous = permuted.contiguous()
-        weight = torch.randn(4)
-        bias = torch.randn(4)
-        output, mean, rstd = torch.ops.aten.native_layer_norm.default(
-            contiguous, [4], weight, bias, 1e-6
-        )
-        grad_input, _, _ = torch.ops.aten.native_layer_norm_backward.default(
-            torch.randn_like(output),
-            contiguous,
-            [4],
-            mean,
-            rstd,
-            weight,
-            bias,
-            [True, True, True],
-        )
-
-        self.assertNotEqual(permuted.stride(), contiguous.stride())
-        self.assertEqual(grad_input.stride(), contiguous.stride())
 
 
 @unittest.skipUnless(

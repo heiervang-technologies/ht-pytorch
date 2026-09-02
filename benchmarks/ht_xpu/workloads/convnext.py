@@ -136,44 +136,6 @@ def _adamw_options(device: str) -> dict[str, bool]:
     return {"foreach": False, "capturable": is_xpu, "fused": is_xpu}
 
 
-class _HTLayerNorm2d(torch.nn.LayerNorm):
-    """Expose the contiguous input layout required by native LayerNorm.
-
-    Native CPU and XPU LayerNorm already make this conversion internally. Doing
-    it explicitly keeps AOTAutograd's fake backward layout consistent with the
-    contiguous grad_input returned by the native kernels.
-    """
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        input = input.permute(0, 2, 3, 1).contiguous()
-        output = torch.nn.functional.layer_norm(
-            input, self.normalized_shape, self.weight, self.bias, self.eps
-        )
-        return output.permute(0, 3, 1, 2)
-
-
-def _prepare_native_layer_norm(module: torch.nn.Module) -> int:
-    replaced = 0
-    for name, child in list(module.named_children()):
-        if (
-            isinstance(child, torch.nn.LayerNorm)
-            and type(child).__name__ == "LayerNorm2d"
-        ):
-            replacement = _HTLayerNorm2d(
-                child.normalized_shape,
-                eps=child.eps,
-                elementwise_affine=child.elementwise_affine,
-                bias=child.bias is not None,
-            )
-            replacement.load_state_dict(child.state_dict())
-            replacement.train(child.training)
-            module._modules[name] = replacement
-            replaced += 1
-        else:
-            replaced += _prepare_native_layer_norm(child)
-    return replaced
-
-
 class ConvNeXtWorkload:
     name = "convnext"
 
@@ -188,10 +150,9 @@ class ConvNeXtWorkload:
     ):
         self.variant, self.device, self.config = variant, device, config
         torch.manual_seed(config.seed)
-        self.model = model_builder(config)
-        if variant == "ht":
-            _prepare_native_layer_norm(self.model)
-        self.model = self.model.to(memory_format=torch.channels_last).to(device)
+        self.model = (
+            model_builder(config).to(memory_format=torch.channels_last).to(device)
+        )
         self.model.train()
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),

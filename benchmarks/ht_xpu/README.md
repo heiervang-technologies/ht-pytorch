@@ -103,11 +103,8 @@ ConvNeXt-Tiny on CIFAR-100 at 224px with batch 32. Use
 All XPU variants use native fused AdamW after validating that its optimizer state
 and gradients remain on the device. The compiled baseline otherwise uses default
 Inductor. The HT variant opts into native torch-xpu-ops LayerNorm forward/backward
-kernels instead of generic Inductor decompositions. Its ConvNeXt LayerNorm2d
-rewrite makes the internally required contiguous NHWC conversion explicit so
-AOTAutograd observes the native backward kernel's actual contiguous output
-layout. It does not enable max-autotune on Lunar Lake. Run a matched acceptance
-pair with:
+kernels instead of generic Inductor decompositions; it does not enable
+max-autotune on Lunar Lake. Run a matched acceptance pair with:
 
 ```bash
 mkdir -p benchmarks/ht_xpu/results/convnext-acceptance
