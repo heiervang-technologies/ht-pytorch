@@ -108,9 +108,7 @@ class TestQwenOps(TestCase):
         reference = Block()
         optimized = copy.deepcopy(reference)
         replaced = enable_qwen35_compilation_paths(optimized)
-        self.assertEqual(
-            replaced, {"rms_norm": 1, "rms_norm_gated": 0, "swiglu": 1}
-        )
+        self.assertEqual(replaced, {"rms_norm": 1, "rms_norm_gated": 0})
         reference_input = torch.randn(2, 4, 8, requires_grad=True)
         optimized_input = reference_input.detach().clone().requires_grad_()
         reference_output = reference(reference_input)
@@ -123,6 +121,22 @@ class TestQwenOps(TestCase):
             reference.parameters(), optimized.parameters()
         ):
             self.assertEqual(reference_parameter.grad, optimized_parameter.grad)
+
+    def test_module_replacement_does_not_bypass_lora_projections(self):
+        class AdapterLinear(nn.Module):
+            def __init__(self, base):
+                super().__init__()
+                self.base = base
+                self.adapter = nn.Linear(base.in_features, base.out_features, bias=False)
+
+            def forward(self, x):
+                return self.base(x) + self.adapter(x)
+
+        mlp = Qwen3_5MLP()
+        enable_qwen35_compilation_paths(mlp)
+        mlp.gate_proj = AdapterLinear(mlp.gate_proj)
+        mlp(torch.randn(2, 8)).sum().backward()
+        self.assertIsNotNone(mlp.gate_proj.adapter.weight.grad)
 
 
 if __name__ == "__main__":

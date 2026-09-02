@@ -89,10 +89,6 @@ def _rms_norm_forward(module: nn.Module, x: Tensor) -> Tensor:
     return qwen_rms_norm(x, module.weight, module.eps)
 
 
-def _mlp_forward(module: nn.Module, x: Tensor) -> Tensor:
-    return module.down_proj(swiglu(x, module.gate_proj.weight, module.up_proj.weight))
-
-
 def _rms_norm_gated_forward(
     module: nn.Module, hidden_states: Tensor, gate: Tensor
 ) -> Tensor:
@@ -113,7 +109,7 @@ def enable_qwen35_compilation_paths(model: nn.Module) -> dict[str, int]:
     Transformers or a model download.
     """
 
-    replaced = {"rms_norm": 0, "rms_norm_gated": 0, "swiglu": 0}
+    replaced = {"rms_norm": 0, "rms_norm_gated": 0}
     for module in model.modules():
         name = type(module).__name__
         if name in ("Qwen3_5RMSNorm", "Qwen3_5MoeRMSNorm"):
@@ -124,12 +120,4 @@ def enable_qwen35_compilation_paths(model: nn.Module) -> dict[str, int]:
                 continue
             module.forward = _rms_norm_gated_forward.__get__(module, type(module))
             replaced["rms_norm_gated"] += 1
-        elif name in ("Qwen3_5MLP", "Qwen3_5MoeMLP"):
-            hidden_act = getattr(getattr(module, "config", None), "hidden_act", "silu")
-            if hidden_act not in ("silu", "swish"):
-                continue
-            if module.gate_proj.bias is not None or module.up_proj.bias is not None:
-                continue
-            module.forward = _mlp_forward.__get__(module, type(module))
-            replaced["swiglu"] += 1
     return replaced
