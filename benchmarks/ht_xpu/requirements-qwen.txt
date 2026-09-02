@@ -1,0 +1,6 @@
+# Benchmark-only dependencies. PyTorch is supplied by the source build under test.
+transformers==5.0.0
+datasets==4.5.0
+peft==0.18.1
+safetensors==0.7.0
+sentencepiece==0.2.1
