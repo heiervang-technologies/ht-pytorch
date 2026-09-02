@@ -25,8 +25,9 @@ case "${mode}" in
         "${python}" -m pip uninstall -y torch
         "${python}" -m pip install -r requirements-build.txt
         git submodule sync --recursive
-        git submodule update --init --recursive
-        USE_XPU=1 USE_CUDA=0 USE_ROCM=0 USE_XCCL=0 \
+        git submodule update --init
+        BUILD_TEST=0 USE_DISTRIBUTED=0 USE_MPI=0 USE_GLOO=0 \
+            USE_XPU=1 USE_CUDA=0 USE_ROCM=0 USE_XCCL=0 \
             TORCH_XPU_ARCH_LIST=lnl-m \
             CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-}" \
             "${python}" -m pip install -e . -v --no-build-isolation
