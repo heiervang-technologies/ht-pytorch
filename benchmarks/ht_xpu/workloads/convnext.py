@@ -136,6 +136,19 @@ def _adamw_options(device: str) -> dict[str, bool]:
     return {"foreach": False, "capturable": is_xpu, "fused": is_xpu}
 
 
+class _HTLayerNorm(torch.nn.LayerNorm):
+    """Expose the contiguous layout returned by native LayerNorm backward."""
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.layer_norm(
+            input.contiguous(),
+            self.normalized_shape,
+            self.weight,
+            self.bias,
+            self.eps,
+        )
+
+
 class _HTLayerNorm2d(torch.nn.LayerNorm):
     """Expose the contiguous input layout required by native LayerNorm.
 
@@ -155,11 +168,14 @@ class _HTLayerNorm2d(torch.nn.LayerNorm):
 def _prepare_native_layer_norm(module: torch.nn.Module) -> int:
     replaced = 0
     for name, child in list(module.named_children()):
-        if (
-            isinstance(child, torch.nn.LayerNorm)
-            and type(child).__name__ == "LayerNorm2d"
-        ):
-            replacement = _HTLayerNorm2d(
+        replacement_type: type[torch.nn.LayerNorm] | None = None
+        if isinstance(child, torch.nn.LayerNorm):
+            if type(child).__name__ == "LayerNorm2d":
+                replacement_type = _HTLayerNorm2d
+            elif type(child) is torch.nn.LayerNorm:
+                replacement_type = _HTLayerNorm
+        if replacement_type is not None:
+            replacement = replacement_type(
                 child.normalized_shape,
                 eps=child.eps,
                 elementwise_affine=child.elementwise_affine,

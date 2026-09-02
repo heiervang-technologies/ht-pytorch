@@ -10,6 +10,7 @@ from benchmarks.ht_xpu.diagnostics import assert_tensor_residency
 from benchmarks.ht_xpu.run import _workload_options
 from benchmarks.ht_xpu.workloads.convnext import (
     _adamw_options,
+    _HTLayerNorm,
     _HTLayerNorm2d,
     _prepare_native_layer_norm,
     ConvNeXtConfig,
@@ -27,6 +28,10 @@ class LayerNorm2d(torch.nn.LayerNorm):
             self.eps,
         )
         return output.permute(0, 3, 1, 2)
+
+
+class UnrelatedLayerNorm(torch.nn.LayerNorm):
+    pass
 
 
 def _tiny_model(config: ConvNeXtConfig) -> torch.nn.Module:
@@ -138,7 +143,7 @@ class TestConvNeXtCPU(unittest.TestCase):
         )
         assert_tensor_residency(workload.residency_objects(), "cpu")
 
-    def test_ht_layer_norm_rewrite_preserves_state_and_results(self):
+    def test_ht_layer_norm_rewrite_preserves_state_results_and_gradients(self):
         reference = torch.nn.Sequential(LayerNorm2d(4))
         candidate = torch.nn.Sequential(LayerNorm2d(4))
         candidate.load_state_dict(reference.state_dict())
@@ -148,8 +153,56 @@ class TestConvNeXtCPU(unittest.TestCase):
         self.assertIsInstance(candidate[0], _HTLayerNorm2d)
         self.assertEqual(tuple(candidate.state_dict()), original_keys)
 
-        input = torch.randn(2, 4, 3, 5)
-        torch.testing.assert_close(candidate(input), reference(input))
+        reference_input = torch.randn(2, 4, 3, 5, requires_grad=True)
+        candidate_input = reference_input.detach().clone().requires_grad_()
+        reference_output = reference(reference_input)
+        candidate_output = candidate(candidate_input)
+        torch.testing.assert_close(candidate_output, reference_output)
+        reference_output.square().mean().backward()
+        candidate_output.square().mean().backward()
+        torch.testing.assert_close(candidate_input.grad, reference_input.grad)
+        torch.testing.assert_close(candidate[0].weight.grad, reference[0].weight.grad)
+
+    def test_plain_layer_norm_rewrite_handles_failing_768_layout(self):
+        class Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.norm = torch.nn.LayerNorm(768)
+                self.unrelated = UnrelatedLayerNorm(768)
+
+        reference = Model()
+        candidate = Model()
+        candidate.load_state_dict(reference.state_dict())
+        original_keys = tuple(candidate.state_dict())
+
+        self.assertEqual(_prepare_native_layer_norm(candidate), 1)
+        self.assertIsInstance(candidate.norm, _HTLayerNorm)
+        self.assertIsInstance(candidate.unrelated, UnrelatedLayerNorm)
+        self.assertEqual(tuple(candidate.state_dict()), original_keys)
+
+        base = torch.randn(2, 768, 2, 2)
+        reference_input = base.permute(0, 2, 3, 1).requires_grad_()
+        candidate_input = reference_input.detach().clone().requires_grad_()
+        reference.norm(reference_input).square().mean().backward()
+        candidate.norm(candidate_input).square().mean().backward()
+
+        self.assertFalse(reference_input.is_contiguous())
+        torch.testing.assert_close(candidate_input.grad, reference_input.grad)
+        torch.testing.assert_close(
+            candidate.norm.weight.grad, reference.norm.weight.grad
+        )
+
+    def test_rewrite_count_matches_torchvision_convnext_tiny_topology(self):
+        model = torch.nn.ModuleList(
+            [torch.nn.LayerNorm(4) for _ in range(18)]
+            + [LayerNorm2d(4) for _ in range(5)]
+            + [UnrelatedLayerNorm(4)]
+        )
+
+        self.assertEqual(_prepare_native_layer_norm(model), 23)
+        self.assertEqual(sum(type(item) is _HTLayerNorm for item in model), 18)
+        self.assertEqual(sum(type(item) is _HTLayerNorm2d for item in model), 5)
+        self.assertEqual(sum(type(item) is UnrelatedLayerNorm for item in model), 1)
 
     def test_explicit_contiguous_matches_native_backward_layout_contract(self):
         base = torch.randn(2, 4, 3, 5)
