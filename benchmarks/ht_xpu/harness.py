@@ -93,11 +93,15 @@ class BenchmarkRunner:
                 synchronize(cfg.device)
                 samples.append((time.perf_counter() - start) / cfg.measured_steps)
         throughput = [workload.units_per_step / value for value in samples]
+        workload_metadata = getattr(workload, "benchmark_metadata", None)
         return BenchmarkResult(
             workload=workload.name, variant=cfg.variant, device=cfg.device,
             warmup_steps=cfg.warmup_steps, measured_steps=cfg.measured_steps,
             repeats=cfg.repeats, samples_seconds=samples, throughput=throughput,
-            metadata=machine_metadata(),
+            metadata={
+                **machine_metadata(),
+                "benchmark_config": workload_metadata() if workload_metadata else {},
+            },
             metrics={"latency_seconds": summarize(samples), "throughput": summarize(throughput), **memory_metrics(cfg.device)},
             diagnostics=compile_diagnostics.delta,
         )

@@ -8,7 +8,7 @@ testable without downloading a model or dataset.
 from __future__ import annotations
 
 import contextlib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 import json
 from pathlib import Path
 from typing import Any, Iterator, Literal, Mapping
@@ -16,12 +16,23 @@ from typing import Any, Iterator, Literal, Mapping
 import torch
 from torch import Tensor, nn
 
+from .harness import register_workload
+
 
 MODEL_ID = "Qwen/Qwen3.5-0.8B-Base"
 DATASET_ID = "databricks/databricks-dolly-15k"
 TRAIN_EXAMPLES = 4096
 EVAL_EXAMPLES = 512
 IGNORE_INDEX = -100
+
+
+def _bool_option(value: str) -> bool:
+    normalized = value.lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"expected a boolean, got {value!r}")
 
 
 @dataclass(frozen=True)
@@ -67,6 +78,35 @@ class QwenSFTConfig:
             )
         if self.sequence_length <= 0 or self.gradient_accumulation_steps <= 0:
             raise ValueError("sequence and accumulation lengths must be positive")
+
+    @classmethod
+    def from_options(
+        cls, options: dict[str, str], *, device: str, compile_model: bool
+    ) -> "QwenSFTConfig":
+        converters: dict[str, Any] = {
+            "training": str,
+            "model_id": str,
+            "sequence_length": int,
+            "seed": int,
+            "learning_rate": float,
+            "weight_decay": float,
+            "gradient_accumulation_steps": int,
+            "gradient_checkpointing": _bool_option,
+            "compile_backend": str,
+            "lora_rank": int,
+            "lora_alpha": int,
+            "lora_dropout": float,
+        }
+        unknown = set(options) - {field.name for field in fields(cls)}
+        # Device and compilation mode are controlled by the shared runner so a
+        # result cannot accidentally be labelled as a different variant/device.
+        unknown |= set(options) & {"device", "compile_model"}
+        if unknown:
+            raise ValueError(
+                f"unknown or runner-controlled Qwen options: {sorted(unknown)}"
+            )
+        values = {key: converters[key](value) for key, value in options.items()}
+        return cls(device=device, compile_model=compile_model, **values)
 
 
 def format_dolly_prompt(example: Mapping[str, Any]) -> str:
@@ -206,8 +246,6 @@ def _cpu_tree(value: Any) -> Any:
 class QwenSFTWorkload:
     """Small adapter consumed by the shared ``benchmarks.ht_xpu`` runner."""
 
-    name = "qwen35"
-
     def __init__(
         self,
         config: QwenSFTConfig,
@@ -234,6 +272,8 @@ class QwenSFTWorkload:
         self.train_dataset: Any | None = None
         self.eval_dataset: Any | None = None
         self.optimizer.zero_grad(set_to_none=True)
+        self._batch_iterator: Iterator[dict[str, Tensor]] | None = None
+        self._last_device_batch: dict[str, Tensor] = {}
         if config.compile_model:
             self.model = torch.compile(
                 self.model,
@@ -241,6 +281,40 @@ class QwenSFTWorkload:
                 dynamic=False,
                 fullgraph=False,
             )
+
+    @property
+    def name(self) -> str:
+        return f"qwen35-{self.config.training}"
+
+    @property
+    def units_per_step(self) -> float:
+        return float(self.config.sequence_length * self.config.gradient_accumulation_steps)
+
+    def step(self) -> dict[str, Tensor | bool]:
+        """Execute one complete optimizer step for stable benchmark sampling."""
+
+        result: dict[str, Tensor | bool] = {}
+        for _ in range(self.config.gradient_accumulation_steps):
+            if self._batch_iterator is None:
+                self._batch_iterator = self.batches()
+            try:
+                batch = next(self._batch_iterator)
+            except StopIteration:
+                self._batch_iterator = self.batches()
+                batch = next(self._batch_iterator)
+            result = self.train_step(batch)
+        if not result.get("optimizer_step"):
+            raise RuntimeError("Qwen benchmark step did not reach optimizer boundary")
+        return result
+
+    def residency_objects(self) -> list[Any]:
+        return [self.model, self.optimizer, self._last_device_batch]
+
+    def benchmark_metadata(self) -> dict[str, Any]:
+        metadata = asdict(self.config)
+        for runner_setting in ("device", "compile_model", "compile_backend"):
+            metadata.pop(runner_setting)
+        return metadata
 
     def setup_data(self) -> None:
         """Download and tokenize the benchmark's deterministic Dolly subsets."""
@@ -292,7 +366,7 @@ class QwenSFTWorkload:
             example, self.tokenizer, self.config.sequence_length
         )
 
-    def train_step(self, batch: Mapping[str, Tensor]) -> dict[str, float | bool]:
+    def train_step(self, batch: Mapping[str, Tensor]) -> dict[str, Tensor | bool]:
         """Run one microbatch, stepping AdamW at the accumulation boundary."""
 
         self.model.train()
@@ -302,6 +376,7 @@ class QwenSFTWorkload:
             else value.to(self.config.device, non_blocking=True)
             for key, value in batch.items()
         }
+        self._last_device_batch = device_batch
         autocast = (
             torch.autocast(device_type="xpu", dtype=torch.bfloat16)
             if self.config.device.startswith("xpu")
@@ -317,8 +392,8 @@ class QwenSFTWorkload:
             self.optimizer.step()
             self.optimizer.zero_grad(set_to_none=True)
         return {
-            "loss": float(loss.detach())
-            * self.config.gradient_accumulation_steps,
+            # Converting to float synchronizes XPU inside the timed region.
+            "loss": loss.detach() * self.config.gradient_accumulation_steps,
             "optimizer_step": stepped,
         }
 
@@ -400,3 +475,15 @@ def add_cli_arguments(parser: Any) -> None:
 
 def create_workload(args: Any) -> QwenSFTWorkload:
     return QwenSFTWorkload.from_args(args)
+
+
+def create_benchmark_workload(
+    variant: str, device: str, options: dict[str, str]
+) -> QwenSFTWorkload:
+    config = QwenSFTConfig.from_options(
+        options, device=device, compile_model=variant in {"xpu-compiled", "ht"}
+    )
+    return QwenSFTWorkload(config)
+
+
+register_workload("qwen35", create_benchmark_workload)

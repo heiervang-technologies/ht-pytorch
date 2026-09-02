@@ -110,6 +110,34 @@ class TestQwenSFT(unittest.TestCase):
             self.assertTrue(torch.equal(expected, model.head.weight))
             self.assertTrue(path.exists())
 
+    def test_shared_harness_step_is_complete_optimizer_step(self):
+        config = QwenSFTConfig(
+            training="full", device="cpu", sequence_length=8,
+            gradient_accumulation_steps=2,
+        )
+        workload = QwenSFTWorkload(config, model=TinyLM(), tokenizer=TinyTokenizer())
+        batch = workload.prepare_example({"instruction": "a", "response": "answer"})
+        workload._batch_iterator = iter([batch, batch])
+        initial = workload.model.head.weight.detach().clone()
+
+        result = workload.step()
+
+        self.assertTrue(result["optimizer_step"])
+        self.assertFalse(torch.equal(initial, workload.model.head.weight))
+        self.assertEqual(workload.units_per_step, 16)
+        self.assertIn(workload.model, workload.residency_objects())
+
+    def test_runner_controlled_qwen_options_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "runner-controlled"):
+            QwenSFTConfig.from_options(
+                {"device": "cpu"}, device="xpu", compile_model=True
+            )
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            QwenSFTConfig.from_options(
+                {"gradient_checkpointing": "perhaps"},
+                device="cpu", compile_model=False,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
