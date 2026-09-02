@@ -13,7 +13,7 @@ and recompile counters are emitted as diagnostics.
 
 The Qwen benchmark keeps the comparison variants separate. `xpu-compiled` uses
 stock `backend="inductor"`; `ht` selects `backend="ht_xpu"`, compiler-visible
-Qwen RMSNorm/SwiGLU paths, and fixed-shape GEMM autotuning. The HT backend emits
+Qwen normalization paths, and fixed-shape GEMM autotuning. The HT backend emits
 an `ht_xpu_graph_profile` structured-trace artifact for every forward and backward
 graph. This inventory is diagnostic evidence only: report speedups exclusively
 from measured benchmark JSON, never from the presence of an optimization.
@@ -48,6 +48,22 @@ USE_XPU=1 USE_CUDA=0 USE_ROCM=0 USE_XCCL=0 TORCH_XPU_ARCH_LIST=lnl-m
 Both steps write versioned JSON diagnostics under the ignored `results/`
 directory. Override `HT_XPU_TORCH_VERSION` to test another official release and
 `HT_XPU_IMAGE` to use another local image tag.
+
+The wrapper mounts the host `${HF_HOME:-$HOME/.cache/huggingface}` at
+`/hf-cache` and disables the Xet transport, which can stall on large anonymous
+downloads. Cache and validate the real benchmark checkpoint and Dolly dataset
+before a hardware run:
+
+```bash
+benchmarks/ht_xpu/docker/xpu_env.sh \
+  python -m benchmarks.ht_xpu.prepare_assets
+benchmarks/ht_xpu/docker/xpu_env.sh \
+  python -m benchmarks.ht_xpu.prepare_assets --local-files-only
+```
+
+The second command is the offline acceptance check. Randomly initialized model
+weights are not a benchmark substitute. Set `HF_TOKEN` in the invoking
+environment if Hub rate limits require authentication.
 
 For an interactive container:
 
