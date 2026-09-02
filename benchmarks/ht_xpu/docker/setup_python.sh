@@ -5,7 +5,9 @@ mode=${1:-official}
 torch_version=${HT_XPU_TORCH_VERSION:-2.13.0}
 python=/opt/venv/bin/python
 
+set +u
 source /opt/intel/oneapi/setvars.sh --force
+set -u
 
 case "${mode}" in
     official)
