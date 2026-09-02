@@ -5,10 +5,6 @@ mode=${1:-official}
 torch_version=${HT_XPU_TORCH_VERSION:-2.13.0}
 python=/opt/venv/bin/python
 
-set +u
-source /opt/intel/oneapi/setvars.sh --force
-set -u
-
 case "${mode}" in
     official)
         "${python}" -m pip install --no-cache-dir \
@@ -23,6 +19,9 @@ case "${mode}" in
         )
         ;;
     fork)
+        set +u
+        source /opt/intel/oneapi/setvars.sh --force
+        set -u
         "${python}" -m pip uninstall -y torch
         "${python}" -m pip install --no-cache-dir -r requirements-build.txt
         git submodule sync --recursive
