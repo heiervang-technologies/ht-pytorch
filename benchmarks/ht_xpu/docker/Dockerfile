@@ -7,7 +7,6 @@ COPY install_system.sh /opt/ht-xpu/install_system.sh
 RUN /opt/ht-xpu/install_system.sh "${XPU_TOOLKIT_URL}"
 
 ENV PATH=/opt/venv/bin:/opt/intel/oneapi/compiler/latest/bin:${PATH}
-ENV LD_LIBRARY_PATH=/opt/intel/oneapi/compiler/latest/lib
 ENV ONEAPI_ROOT=/opt/intel/oneapi
 ENV TORCH_XPU_ARCH_LIST=lnl-m
 ENV USE_XPU=1
