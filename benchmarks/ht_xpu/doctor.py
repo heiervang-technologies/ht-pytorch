@@ -141,7 +141,9 @@ def _torch_report(run_smoke: bool) -> dict[str, Any]:
 
     def adamw_step() -> dict[str, Any]:
         module = torch.nn.Linear(64, 64).to(device, torch.bfloat16)
-        optimizer = torch.optim.AdamW(module.parameters(), lr=1e-3, foreach=False)
+        optimizer = torch.optim.AdamW(
+            module.parameters(), lr=1e-3, foreach=False, capturable=True
+        )
         inputs = torch.randn(8, 64, device=device, dtype=torch.bfloat16)
         module(inputs).float().square().mean().backward()
         optimizer.step()
@@ -155,6 +157,7 @@ def _torch_report(run_smoke: bool) -> dict[str, Any]:
         assert state_devices == {"xpu"}
         return {
             "foreach": False,
+            "capturable": True,
             "optimizer_state_devices": sorted(state_devices),
         }
 
