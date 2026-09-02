@@ -21,6 +21,7 @@ from torch._decomp.decompositions import (
     _grid_sampler_2d as decomp_grid_sampler_2d,
     _index_add,
     embedding_dense_backward as decomp_embedding_dense_backward,
+    native_layer_norm_backward as decomp_native_layer_norm_backward,
     pw_cast_for_opmath,
     pw_cast_for_opmath_non_tensor_args,
 )
@@ -119,6 +120,7 @@ decomps_to_exclude: list[torch._ops.OpOverload | torch._ops.OpOverloadPacket] = 
     aten.clamp_min,
     aten.embedding_dense_backward,  # we fall back on xpu
     aten.native_layer_norm,  # we fall back on mtia
+    aten.native_layer_norm_backward,
     aten.index_add,  # we conditionally call this decomp
     aten.glu,  # inductor lowers this directly
     aten.select_scatter,  # need to be in the ATen graph in order for it to work with the re-inplacing pass
@@ -212,10 +214,35 @@ def _native_layer_norm(
     bias: torch.Tensor | None,
     eps: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    if input.is_mtia:
+    if input.is_mtia or (input.is_xpu and config.xpu.use_native_layer_norm):
         return NotImplemented
     # We can write a util function to update decomp table if we have more ops to fallback.
     return decomp_native_layer_norm(input, normalized_shape, weight, bias, eps)
+
+
+@register_decomposition(aten.native_layer_norm_backward.default)
+def _native_layer_norm_backward(
+    grad_output: torch.Tensor,
+    input: torch.Tensor,
+    normalized_shape: utils.ShapeType,
+    mean: torch.Tensor,
+    rstd: torch.Tensor,
+    weight: torch.Tensor | None,
+    bias: torch.Tensor | None,
+    output_mask: list[bool],
+) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+    if input.is_xpu and config.xpu.use_native_layer_norm:
+        return NotImplemented
+    return decomp_native_layer_norm_backward(
+        grad_output,
+        input,
+        normalized_shape,
+        mean,
+        rstd,
+        weight,
+        bias,
+        output_mask,
+    )
 
 
 @register_decomposition([aten.sym_constrain_range_for_size.default])
