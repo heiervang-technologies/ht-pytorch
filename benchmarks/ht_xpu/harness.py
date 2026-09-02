@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
@@ -27,7 +28,7 @@ class Workload(Protocol):
     def residency_objects(self) -> list[Any]: ...
 
 
-WorkloadFactory = Callable[[str, str], Workload]
+WorkloadFactory = Callable[..., Workload]
 _WORKLOADS: dict[str, WorkloadFactory] = {}
 
 
@@ -37,11 +38,18 @@ def register_workload(name: str, factory: WorkloadFactory) -> None:
     _WORKLOADS[name] = factory
 
 
-def create_workload(name: str, variant: str, device: str) -> Workload:
+def create_workload(
+    name: str, variant: str, device: str, options: dict[str, str] | None = None
+) -> Workload:
     try:
-        return _WORKLOADS[name](variant, device)
+        factory = _WORKLOADS[name]
     except KeyError as exc:
         raise ValueError(f"unknown workload {name!r}; registered: {sorted(_WORKLOADS)}") from exc
+    # Keep external workload modules written against the original two-argument API
+    # working while allowing built-in workloads to expose reproducible settings.
+    if len(inspect.signature(factory).parameters) >= 3:
+        return factory(variant, device, options or {})
+    return factory(variant, device)
 
 
 @dataclass(frozen=True)
