@@ -52,3 +52,20 @@ python -m benchmarks.ht_xpu.doctor --require-xpu
 The invoking user needs permission to access `/dev/dri/renderD128`. The wrapper
 passes its numeric group into the container. Do not install an out-of-tree
 kernel driver in the container.
+
+## ConvNeXt-Tiny
+
+ConvNeXt-Tiny is built in. A hardware-free smoke run (with a deliberately small
+batch) is:
+
+```bash
+python -m benchmarks.ht_xpu.run --workload convnext --variant cpu \
+  --workload-config synthetic=true --workload-config pretrained=false \
+  --workload-config batch-size=2 --warmup 1 --steps 1 --repeats 1 \
+  --output results/convnext-cpu.json
+```
+
+For the benchmark-of-record, omit the workload overrides to train pretrained
+ConvNeXt-Tiny on CIFAR-100 at 224px with batch 32. Use
+`--workload-config checkpoint=PATH` to save after measurement and
+`--workload-config resume=PATH` to restore model, AdamW state, and step count.
