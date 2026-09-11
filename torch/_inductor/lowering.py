@@ -3378,6 +3378,8 @@ if torch.xpu._is_compiled():
     make_fallback(
         aten.embedding_dense_backward, warn=False
     )  # (XPU-only and faster than decomp)
+    make_fallback(aten.native_layer_norm, warn=False)
+    make_fallback(aten.native_layer_norm_backward, warn=False)
 
 if torch.mtia._is_compiled():
     make_fallback(
