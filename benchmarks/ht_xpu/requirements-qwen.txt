@@ -1,0 +1,8 @@
+# Benchmark-only dependencies. PyTorch is supplied by the source build under test.
+# Qwen 3.5 support is newer than the 5.0 release. Keep this immutable until a
+# release containing model_type=qwen3_5 is validated by the real-model test.
+transformers @ git+https://github.com/huggingface/transformers.git@e84aa52cbd5ee7341a80774ea4cbc96e1f0e3cab
+datasets==4.5.0
+peft==0.18.1
+safetensors==0.8.0
+sentencepiece==0.2.1
